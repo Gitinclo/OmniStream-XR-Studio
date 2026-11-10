@@ -1,0 +1,501 @@
+{
+  "entities": {
+    "Video": {
+      "title": "Video",
+      "description": "Uploaded or AI-generated video stream metadata",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Video title",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "description": "Video description",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "category": {
+          "type": "string",
+          "description": "Video category",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "resolution": {
+          "type": "string",
+          "description": "Max streaming resolution (e.g. 8K, 32K)",
+          "minLength": 2,
+          "maxLength": 20
+        },
+        "videoUrl": {
+          "type": "string",
+          "description": "Video playback URL or stream URI",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of uploader",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Display name of creator",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "ageRating": {
+          "type": "string",
+          "description": "Age rating for parental controls (ALL, TEEN, MATURE)",
+          "enum": ["ALL", "TEEN", "MATURE"],
+          "minLength": 3,
+          "maxLength": 10
+        },
+        "views": {
+          "type": "number",
+          "description": "View count"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "category",
+        "resolution",
+        "videoUrl",
+        "ownerId",
+        "authorName",
+        "ageRating",
+        "views",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "User comment on a video",
+      "type": "object",
+      "properties": {
+        "videoId": {
+          "type": "string",
+          "description": "ID of target video",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of commenter",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Commenter display name",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "text": {
+          "type": "string",
+          "description": "Comment body text",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        }
+      },
+      "required": ["videoId", "ownerId", "authorName", "text", "createdAt"]
+    },
+    "Playlist": {
+      "title": "Playlist",
+      "description": "User-generated playlist and cross-device progress record",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Playlist title",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Owner UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "videoIds": {
+          "type": "string",
+          "description": "Comma-separated bounded list of video IDs",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Update timestamp"
+        }
+      },
+      "required": ["name", "ownerId", "videoIds", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public creator preferences and cross-device playback state",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Owner UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Custom profile name",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "isPremium": {
+          "type": "boolean",
+          "description": "Ad-free premium status"
+        },
+        "parentalControlMode": {
+          "type": "boolean",
+          "description": "Parental safe mode enabled"
+        },
+        "lastWatchedVideoId": {
+          "type": "string",
+          "description": "Synchronized cross-device video ID",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "lastWatchedProgressSec": {
+          "type": "number",
+          "description": "Synchronized playback timestamp in seconds"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Profile creation time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Profile update time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "isPremium",
+        "parentalControlMode",
+        "lastWatchedVideoId",
+        "lastWatchedProgressSec",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Administration, Game Master (GM), Admin, and Moderator role assignment record",
+      "type": "object",
+      "properties": {
+        "targetUid": {
+          "type": "string",
+          "description": "UID of the staff member",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "description": "Contact email of the administrator/GM/moderator",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned authority tier",
+          "enum": ["SUPER_ADMIN", "GM", "ADMIN", "MODERATOR"],
+          "minLength": 2,
+          "maxLength": 20
+        },
+        "permissions": {
+          "type": "string",
+          "description": "Comma-separated permission scopes (administration,gm,admin,moderator,contact)",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "assignedByUid": {
+          "type": "string",
+          "description": "UID of admin who granted the role",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "targetUid",
+        "email",
+        "role",
+        "permissions",
+        "assignedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ModerationTicket": {
+      "title": "ModerationTicket",
+      "description": "User contact inquiry, moderation report, or GM assistance request sent to creatergame31@gmail.com",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the sender",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of sender",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "recipientEmail": {
+          "type": "string",
+          "description": "Official admin/GM/moderator contact email",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "description": "Ticket category (ADMIN, GM, MODERATOR, CONTACT)",
+          "enum": ["ADMIN", "GM", "MODERATOR", "CONTACT"],
+          "minLength": 2,
+          "maxLength": 20
+        },
+        "subject": {
+          "type": "string",
+          "description": "Ticket subject line",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "description": "Detailed message or report body",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "description": "Ticket workflow status (OPEN, IN_REVIEW, RESOLVED)",
+          "enum": ["OPEN", "IN_REVIEW", "RESOLVED"],
+          "minLength": 4,
+          "maxLength": 20
+        },
+        "adminReply": {
+          "type": "string",
+          "description": "Response from creatergame31@gmail.com or moderator team",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "senderName",
+        "recipientEmail",
+        "category",
+        "subject",
+        "message",
+        "status",
+        "adminReply",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ContentReport": {
+      "title": "ContentReport",
+      "description": "User-submitted content violation report for videos, streams, or comments reviewed by admins",
+      "type": "object",
+      "properties": {
+        "targetId": {
+          "type": "string",
+          "description": "ID of reported video, stream, or comment",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "targetType": {
+          "type": "string",
+          "description": "Type of content reported (LUMEN_VIDEO, STUDIO_STREAM, COMMENT)",
+          "enum": ["LUMEN_VIDEO", "STUDIO_STREAM", "COMMENT"],
+          "minLength": 4,
+          "maxLength": 20
+        },
+        "targetTitle": {
+          "type": "string",
+          "description": "Title or snippet of the reported content",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "reporterId": {
+          "type": "string",
+          "description": "UID of the user who reported the content",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reporterName": {
+          "type": "string",
+          "description": "Display name of the reporting user",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "assignedAdminEmail": {
+          "type": "string",
+          "description": "Designated admin/moderator email for review (creatergame31@gmail.com)",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason for reporting content",
+          "enum": [
+            "SPAM_OR_MISLEADING",
+            "HARASSMENT_OR_ABUSE",
+            "COPYRIGHT_OR_IP",
+            "AGE_RESTRICTION_VIOLATION",
+            "ENCODING_OR_PLAYBACK_ISSUE"
+          ],
+          "minLength": 4,
+          "maxLength": 40
+        },
+        "severity": {
+          "type": "string",
+          "description": "Triage severity level",
+          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+          "minLength": 3,
+          "maxLength": 12
+        },
+        "details": {
+          "type": "string",
+          "description": "User explanation of the report",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "description": "Review status (OPEN, IN_REVIEW, ACTIONED, DISMISSED)",
+          "enum": ["OPEN", "IN_REVIEW", "ACTIONED", "DISMISSED"],
+          "minLength": 4,
+          "maxLength": 20
+        },
+        "resolutionNotes": {
+          "type": "string",
+          "description": "Admin review notes and resolution summary",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "targetId",
+        "targetType",
+        "targetTitle",
+        "reporterId",
+        "reporterName",
+        "assignedAdminEmail",
+        "reason",
+        "severity",
+        "details",
+        "status",
+        "resolutionNotes",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/videos/{videoId}": {
+      "schema": { "$ref": "#/entities/Video" },
+      "description": "User-uploaded and AI-generated video catalog"
+    },
+    "/videos/{videoId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Comments belonging to a specific video"
+    },
+    "/playlists/{playlistId}": {
+      "schema": { "$ref": "#/entities/Playlist" },
+      "description": "Private user playlists"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile preferences and cross-device progress"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Administration, GM, Admin, and Moderator staff registry"
+    },
+    "/moderation_tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/ModerationTicket" },
+      "description": "Contact and moderation tickets routed to creatergame31@gmail.com"
+    },
+    "/content_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ContentReport" },
+      "description": "User-submitted content reports reviewed by admins from their dashboard"
+    }
+  }
+}

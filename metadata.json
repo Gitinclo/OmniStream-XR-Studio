@@ -1,0 +1,6 @@
+{
+  "name": "OmniStream XR Studio",
+  "description": "Next-generation 8K/32K spatial video streaming, live studio, AI media creation, bioscience visualizer, and interactive 3D hub.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
