@@ -6,10 +6,11 @@ import {
 } from '../services/cryptoAes256';
 import {
   HardwareTelemetryState,
-  RefreshRateMode,
-  GpuRenderScaleMode,
-  ThermalStatusLevel,
 } from '../services/hardwareGovernor';
+import {
+  HardwareTelemetryHud,
+  formatHardwareTelemetryMetrics,
+} from './HardwareTelemetryHud';
 import {
   NICHE_CATALOG,
   NicheKey,
@@ -26,6 +27,8 @@ import {
   COMPLIANCE_DOCS_CATALOG,
 } from '../services/complianceAndGuardrails';
 
+export { HardwareTelemetryHud, formatHardwareTelemetryMetrics };
+
 export interface VibePitchLeadItem {
   id: string;
   niche: NicheKey;
@@ -39,8 +42,9 @@ export interface VibePitchLeadItem {
 }
 
 export interface SuiteUiState {
-  // Modals
+  // Modals & Floating HUD
   hardwareHudModalOpen: boolean;
+  hardwareHudFloatingCollapsed: boolean;
   complianceHubModalOpen: boolean;
   complianceActiveTab: 'DOCS_8' | 'GUARDRAILS_100';
   selectedComplianceDocFilename: string;
@@ -78,26 +82,8 @@ export interface SuiteUiState {
  * Renders the Top-Bar 90Hz Telemetry Pill & Docs/100-Guardrails Launcher Buttons
  */
 export function renderHeaderSuiteControls(hw: HardwareTelemetryState): string {
-  const thermalColor =
-    hw.thermalLevel === ThermalStatusLevel.NOMINAL
-      ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
-      : hw.thermalLevel === ThermalStatusLevel.LIGHT
-      ? 'text-sky-400 border-sky-500/30 bg-sky-500/10'
-      : hw.thermalLevel === ThermalStatusLevel.MODERATE
-      ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-      : 'text-rose-400 border-rose-500/40 bg-rose-500/15';
-
   return `
-    <button
-      type="button"
-      id="btn-open-hardware-hud"
-      aria-label="Open 90Hz Realme 8 5G Hardware Telemetry HUD"
-      title="Realme 8 5G (Dimensity 700 / Mali-G57 MC2) 90Hz Frame Pacing & 4GB LPDDR4X RAM Governor"
-      class="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border font-mono-code tabular-nums cursor-pointer hover:opacity-90 transition ${thermalColor}"
-    >
-      <span class="w-2 h-2 rounded-full bg-current"></span>
-      <span>${hw.targetFps}Hz · ${hw.avgFrameTimeMs.toFixed(1)}ms · 4GB (${hw.availableRamMb}MB Free)</span>
-    </button>
+    ${HardwareTelemetryHud.renderHeaderTelemetryPill(hw)}
     <button
       type="button"
       id="btn-open-compliance-hub"
@@ -111,171 +97,24 @@ export function renderHeaderSuiteControls(hw: HardwareTelemetryState): string {
 }
 
 /**
+ * Renders the persistent, collapsible on-screen Hardware Telemetry HUD widget
+ */
+export function renderFloatingTelemetryHud(state: SuiteUiState): string {
+  return HardwareTelemetryHud.renderFloatingTelemetryHud(
+    state.hardwareTelemetry,
+    state.hardwareHudFloatingCollapsed
+  );
+}
+
+/**
  * Renders the interactive Realme 8 5G (Dimensity 700 / 90Hz / 4GB LPDDR4X RAM) Hardware & Thermal Optimizer HUD Modal
  */
 export function renderHardwareHudModal(state: SuiteUiState): string {
   if (!state.hardwareHudModalOpen) return '';
-  const hw = state.hardwareTelemetry;
-
-  return `
-    <div role="dialog" aria-modal="true" aria-label="Realme 8 5G Hardware and Thermal Governor HUD" class="fixed inset-0 z-50 pointer-events-auto bg-black/80 flex items-center justify-center p-3 md:p-6">
-      <div class="max-w-4xl w-full max-h-[90vh] overflow-y-auto rounded-2xl bg-[#090d16] text-slate-100 border border-emerald-500/40 p-5 shadow-2xl space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
-          <div>
-            <div class="flex items-center gap-2">
-              <span class="px-2 py-0.5 rounded text-[11px] font-mono-code font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                90Hz HARDWARE &amp; THERMAL GOVERNOR
-              </span>
-              <span class="text-xs font-mono-code text-slate-400">${hw.deviceModel}</span>
-            </div>
-            <h2 class="text-base md:text-lg font-bold text-white mt-1">
-              MediaTek Dimensity 700 (MT6833) · ARM Mali-G57 MC2 · 4GB LPDDR4X RAM
-            </h2>
-          </div>
-          <button type="button" id="btn-close-hardware-hud" aria-label="Close Hardware HUD Modal" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-200 hover:bg-slate-700 cursor-pointer">
-            ✕ Close HUD
-          </button>
-        </div>
-
-        ${
-          state.hardwareStatusBanner
-            ? `<div class="p-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs font-mono-code text-emerald-300">
-                 ${state.hardwareStatusBanner}
-               </div>`
-            : ''
-        }
-
-        <!-- Primary Telemetry KPI Grid (Tabular Numerals) -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono-code tabular-nums">
-          <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase">Target Refresh &amp; Budget</div>
-            <div class="text-lg font-bold text-emerald-400 mt-0.5">${hw.targetFps} FPS (${hw.frameBudgetMs}ms)</div>
-            <div class="text-[11px] text-slate-400">Mode: ${hw.refreshRateMode}</div>
-          </div>
-          <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase">Frame Pacing (Avg / P95)</div>
-            <div class="text-lg font-bold text-sky-400 mt-0.5">${hw.avgFrameTimeMs.toFixed(1)}ms / ${hw.ninetyFifthFrameTimeMs.toFixed(1)}ms</div>
-            <div class="text-[11px] text-slate-400">Jank Frames: ${hw.jankFrameCount} / ${hw.totalSampledFrames}</div>
-          </div>
-          <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase">4GB LPDDR4X RAM Floor</div>
-            <div class="text-lg font-bold ${hw.isLowMemoryFloorTriggered ? 'text-rose-400' : 'text-amber-300'} mt-0.5">
-              ${hw.availableRamMb} MB Free
-            </div>
-            <div class="text-[11px] text-slate-400">Heap: ${hw.usedHeapMb}MB · Cache: ${hw.cachedThumbnailMb}MB</div>
-          </div>
-          <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
-            <div class="text-[10px] text-slate-400 uppercase">Mali-G57 GPU &amp; UFS 2.1 I/O</div>
-            <div class="text-lg font-bold text-indigo-300 mt-0.5">${Math.round(hw.pixelRatioScale * 100)}% Scale</div>
-            <div class="text-[11px] text-slate-400">UFS Seq Ops: ${hw.ufsCompletedOps} (Q: ${hw.ufsSequentialQueueDepth})</div>
-          </div>
-        </div>
-
-        <!-- Interactive Governor Controls -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <!-- 1. Refresh Rate Governor -->
-          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
-            <div class="text-xs font-bold text-emerald-400 uppercase">1. 90Hz / 60Hz Display Governor</div>
-            <p class="text-[11px] text-slate-400">
-              Controls frame pacing budget (11.11ms @ 90Hz vs 16.67ms @ 60Hz) on the 1080×2400 FHD+ panel.
-            </p>
-            <div class="flex flex-col gap-1.5">
-              <button type="button" data-hw-refresh="${RefreshRateMode.AUTO_90HZ_THERMAL_GUARD}" class="btn-hw-refresh px-3 py-1.5 rounded-lg text-xs font-mono-code text-left border cursor-pointer ${
-                hw.refreshRateMode === RefreshRateMode.AUTO_90HZ_THERMAL_GUARD
-                  ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }">
-                ● Auto 90Hz + Thermal Guard
-              </button>
-              <button type="button" data-hw-refresh="${RefreshRateMode.LOCKED_90HZ}" class="btn-hw-refresh px-3 py-1.5 rounded-lg text-xs font-mono-code text-left border cursor-pointer ${
-                hw.refreshRateMode === RefreshRateMode.LOCKED_90HZ
-                  ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }">
-                ● Locked 90Hz (11.1ms Peak)
-              </button>
-              <button type="button" data-hw-refresh="${RefreshRateMode.THERMAL_SAVER_60HZ}" class="btn-hw-refresh px-3 py-1.5 rounded-lg text-xs font-mono-code text-left border cursor-pointer ${
-                hw.refreshRateMode === RefreshRateMode.THERMAL_SAVER_60HZ
-                  ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400'
-                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }">
-                ● 60Hz Battery &amp; Thermal Saver (16.6ms)
-              </button>
-            </div>
-          </div>
-
-          <!-- 2. Mali-G57 MC2 GPU Render Scale & Thermal Simulator -->
-          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
-            <div class="text-xs font-bold text-sky-400 uppercase">2. Mali-G57 MC2 GPU &amp; Thermal State</div>
-            <p class="text-[11px] text-slate-400">
-              Prevents GPU fill-rate bottlenecks on 2.59M pixels by dynamically scaling WebGL backbuffer to 720p (0.67x).
-            </p>
-            <div class="flex gap-1.5">
-              <button type="button" data-hw-scale="${GpuRenderScaleMode.NATIVE_1080P}" class="btn-hw-scale flex-1 py-1.5 rounded-lg text-xs font-mono-code border cursor-pointer ${
-                hw.gpuRenderScaleMode === GpuRenderScaleMode.NATIVE_1080P
-                  ? 'bg-sky-400 text-slate-950 font-bold border-sky-300'
-                  : 'bg-slate-950 text-slate-300 border-slate-800'
-              }">
-                1080p Native
-              </button>
-              <button type="button" data-hw-scale="${GpuRenderScaleMode.SAVER_720P_SCALE}" class="btn-hw-scale flex-1 py-1.5 rounded-lg text-xs font-mono-code border cursor-pointer ${
-                hw.gpuRenderScaleMode === GpuRenderScaleMode.SAVER_720P_SCALE
-                  ? 'bg-sky-400 text-slate-950 font-bold border-sky-300'
-                  : 'bg-slate-950 text-slate-300 border-slate-800'
-              }">
-                720p Scale (0.67x)
-              </button>
-            </div>
-            <div class="pt-1">
-              <div class="text-[11px] font-mono-code text-slate-400 mb-1">Simulate Thermal Sensor State:</div>
-              <div class="grid grid-cols-2 gap-1.5">
-                ${[
-                  ThermalStatusLevel.NOMINAL,
-                  ThermalStatusLevel.LIGHT,
-                  ThermalStatusLevel.MODERATE,
-                  ThermalStatusLevel.CRITICAL,
-                ]
-                  .map(
-                    (lvl) => `
-                  <button type="button" data-hw-thermal="${lvl}" class="btn-hw-thermal py-1 px-2 rounded text-[11px] font-mono-code border cursor-pointer ${
-                      hw.thermalLevel === lvl
-                        ? 'bg-amber-400 text-slate-950 font-bold border-amber-300'
-                        : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
-                    }">
-                    ${lvl}
-                  </button>`
-                  )
-                  .join('')}
-              </div>
-            </div>
-          </div>
-
-          <!-- 3. 4GB LPDDR4X RAM Trim & UFS 2.1 Sequential I/O -->
-          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 flex flex-col justify-between">
-            <div class="space-y-2">
-              <div class="text-xs font-bold text-amber-400 uppercase">3. 4GB LPDDR4X RAM &amp; UFS 2.1 Guard</div>
-              <p class="text-[11px] text-slate-400">
-                Evicts off-screen RGB_565 thumbnail bitmaps and flushes decoded stream buffers to prevent Android Low Memory Killer (LMK) OOM kills.
-              </p>
-              <div class="p-2 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono-code space-y-0.5 tabular-nums">
-                <div>Last Trim Saved: <strong class="text-emerald-400">${hw.lastMemoryTrimSavedMb} MB</strong></div>
-                <div>CPU Affinity: <strong>2× Cortex-A76 (2.2GHz)</strong></div>
-                <div>Bg Workers: <strong>6× Cortex-A55 (2.0GHz)</strong></div>
-              </div>
-            </div>
-            <div class="flex flex-col gap-1.5 pt-1">
-              <button type="button" id="btn-hw-trim-memory" class="w-full py-2 rounded-lg text-xs font-bold bg-amber-400 text-slate-950 hover:bg-amber-300 cursor-pointer">
-                ⚡ Run 4GB Heap &amp; Cache Trim (Level 80)
-              </button>
-              <button type="button" id="btn-hw-ufs-flush" class="w-full py-1.5 rounded-lg text-xs font-mono-code bg-slate-800 text-sky-300 border border-slate-700 hover:bg-slate-700 cursor-pointer">
-                Enqueue Sequential UFS 2.1 Batch Write
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  return HardwareTelemetryHud.renderHardwareGovernorModal(
+    state.hardwareTelemetry,
+    state.hardwareStatusBanner
+  );
 }
 
 /**

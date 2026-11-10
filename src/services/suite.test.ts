@@ -21,6 +21,11 @@ import {
 } from './hardwareGovernor';
 
 import {
+  HardwareTelemetryHud,
+  formatHardwareTelemetryMetrics,
+} from '../ui/HardwareTelemetryHud';
+
+import {
   InputBoundsValidator,
   NicheKey,
   NICHE_CATALOG,
@@ -106,21 +111,41 @@ test('AES-256-GCM 64KB chunked streaming encrypts and reassembles multi-chunk pa
   );
 });
 
-test('RealmeHardwareGovernor manages 90Hz/60Hz frame budgets, thermal fallback, 720p scale, and 4GB RAM trim', async () => {
+test('RealmeHardwareGovernor & HardwareTelemetryHud manage Frame Rate, Memory Usage, and GPU Temperature', async () => {
   const gov = new RealmeHardwareGovernor();
 
-  // Default: AUTO_90HZ_THERMAL_GUARD + NOMINAL thermal => 90 FPS (11.1ms budget)
+  // Default: AUTO_90HZ_THERMAL_GUARD + NOMINAL thermal => 90 FPS (11.1ms budget), ~36.8°C GPU @ 955MHz
   let snap = gov.getSnapshot();
   assert.equal(snap.targetFps, 90);
   assert.equal(snap.frameBudgetMs, 11.1);
   assert.equal(snap.pixelRatioScale, 1.0);
+  assert.equal(snap.currentFps > 85, true);
+  assert.equal(snap.onePercentLowFps > 75, true);
+  assert.equal(snap.recentFrameTimesMs.length, 24);
+  assert.equal(snap.totalRamMb, 4096);
+  assert.equal(snap.usedRamMb + snap.availableRamMb, 4096);
+  assert.equal(snap.memoryUsagePercent > 50 && snap.memoryUsagePercent < 90, true);
+  assert.equal(snap.gpuClockMhz, 955);
+  assert.equal(snap.gpuTempCelsius >= 35 && snap.gpuTempCelsius < 40, true);
 
-  // MODERATE thermal in AUTO_90HZ_THERMAL_GUARD drops to 60 FPS (16.6ms budget)
-  snap = gov.setThermalStatusLevel(ThermalStatusLevel.MODERATE);
+  // Setting GPU temperature to 46.5°C triggers MODERATE thermal and drops refresh to 60Hz (720MHz GPU clock)
+  snap = gov.setGpuTemperatureCelsius(46.5);
+  assert.equal(snap.thermalLevel, ThermalStatusLevel.MODERATE);
   assert.equal(snap.targetFps, 60);
   assert.equal(snap.frameBudgetMs, 16.6);
+  assert.equal(snap.gpuClockMhz, 720);
+
+  // Setting GPU temperature to 52.0°C triggers CRITICAL thermal, 0.67x 720p scale, 550MHz clock, and auto RAM trim
+  const beforeCriticalAvailRam = snap.availableRamMb;
+  snap = gov.setGpuTemperatureCelsius(52.0);
+  assert.equal(snap.thermalLevel, ThermalStatusLevel.CRITICAL);
+  assert.equal(snap.pixelRatioScale, 0.67);
+  assert.equal(snap.gpuClockMhz, 550);
+  assert.equal(snap.availableRamMb > beforeCriticalAvailRam, true);
+  assert.equal(snap.lastMemoryTrimSavedMb > 0, true);
 
   // LOCKED_90HZ keeps 90 FPS even when thermal is MODERATE
+  gov.setThermalStatusLevel(ThermalStatusLevel.MODERATE);
   snap = gov.setRefreshRateMode(RefreshRateMode.LOCKED_90HZ);
   assert.equal(snap.targetFps, 90);
   assert.equal(snap.frameBudgetMs, 11.1);
@@ -129,11 +154,24 @@ test('RealmeHardwareGovernor manages 90Hz/60Hz frame budgets, thermal fallback, 
   snap = gov.setGpuRenderScaleMode(GpuRenderScaleMode.SAVER_720P_SCALE);
   assert.equal(snap.pixelRatioScale, 0.67);
 
-  // 4GB LPDDR4X memory trim frees cached MBs
-  const beforeAvail = snap.availableRamMb;
-  const trimmed = gov.performMemoryTrim(80);
-  assert.equal(trimmed.availableRamMb > beforeAvail, true);
-  assert.equal(trimmed.lastMemoryTrimSavedMb > 0, true);
+  // Verify HardwareTelemetryHud formatting and component rendering
+  const formatted = formatHardwareTelemetryMetrics(snap);
+  assert.equal(formatted.fpsHeadline.includes('FPS'), true);
+  assert.equal(formatted.ramHeadline.includes('4096 MB'), true);
+  assert.equal(formatted.gpuTempHeadline.includes('°C'), true);
+
+  const pillHtml = HardwareTelemetryHud.renderHeaderTelemetryPill(snap);
+  assert.equal(pillHtml.includes('FPS'), true);
+  assert.equal(pillHtml.includes('RAM'), true);
+  assert.equal(pillHtml.includes('GPU'), true);
+
+  const expandedHudHtml = HardwareTelemetryHud.renderFloatingTelemetryHud(snap, false);
+  assert.equal(expandedHudHtml.includes('HARDWARE TELEMETRY HUD'), true);
+  assert.equal(expandedHudHtml.includes('4GB LPDDR4X Memory'), true);
+  assert.equal(expandedHudHtml.includes('Mali-G57 GPU Temp'), true);
+
+  const collapsedHudHtml = HardwareTelemetryHud.renderFloatingTelemetryHud(snap, true);
+  assert.equal(collapsedHudHtml.includes('floating-compact'), true);
 
   // UFS 2.1 sequential queue executes tasks in order
   const order: number[] = [];

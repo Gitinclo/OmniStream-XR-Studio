@@ -100,7 +100,9 @@ import {
 import { GuardrailCategoryId } from '../services/complianceAndGuardrails';
 import {
   SuiteUiState,
+  HardwareTelemetryHud,
   renderHeaderSuiteControls,
+  renderFloatingTelemetryHud,
   renderHardwareHudModal,
   renderComplianceHubModal,
   renderUnifiedWorkspaceAndVaultView,
@@ -336,6 +338,7 @@ export class AppShell {
   private decryptedVaultPlain = '';
   private suiteState: SuiteUiState = {
     hardwareHudModalOpen: false,
+    hardwareHudFloatingCollapsed: false,
     complianceHubModalOpen: false,
     complianceActiveTab: 'DOCS_8',
     selectedComplianceDocFilename: 'README.md',
@@ -489,6 +492,12 @@ export class AppShell {
         }
       }
     }, 1000);
+
+    // Subscribe to 2Hz Hardware Telemetry Governor updates for live HUD refresh
+    hardwareGovernor.subscribe((hwState) => {
+      this.suiteState.hardwareTelemetry = hwState;
+      HardwareTelemetryHud.updateLiveDom(hwState);
+    });
 
     this.render();
   }
@@ -739,6 +748,7 @@ export class AppShell {
 
         ${this.renderConfirmationModal()}
         ${this.renderReportContentModal()}
+        ${renderFloatingTelemetryHud(this.suiteState)}
         ${renderHardwareHudModal(this.suiteState)}
         ${renderComplianceHubModal(this.suiteState)}
       </div>
@@ -2806,14 +2816,49 @@ export class AppShell {
       this.render();
     });
 
-    // Top-Bar 90Hz Hardware HUD & 8-Doc / 100-Guardrail Compliance Hub Modals
+    // Top-Bar & Floating 90Hz Hardware HUD & 8-Doc / 100-Guardrail Compliance Hub Modals
     document.getElementById('btn-open-hardware-hud')?.addEventListener('click', () => {
       this.suiteState.hardwareTelemetry = hardwareGovernor.getSnapshot();
       this.suiteState.hardwareHudModalOpen = true;
       this.render();
     });
+    document.getElementById('btn-floating-open-hw-modal')?.addEventListener('click', () => {
+      this.suiteState.hardwareTelemetry = hardwareGovernor.getSnapshot();
+      this.suiteState.hardwareHudModalOpen = true;
+      this.render();
+    });
+    document.getElementById('btn-toggle-floating-hw-hud')?.addEventListener('click', () => {
+      this.suiteState.hardwareHudFloatingCollapsed =
+        !this.suiteState.hardwareHudFloatingCollapsed;
+      this.render();
+    });
+    document.getElementById('btn-floating-hw-trim')?.addEventListener('click', () => {
+      this.suiteState.hardwareTelemetry = hardwareGovernor.performMemoryTrim(80);
+      this.suiteState.hardwareStatusBanner = `4GB LPDDR4X RAM Trim executed from HUD: Freed ${this.suiteState.hardwareTelemetry.lastMemoryTrimSavedMb} MB (${this.suiteState.hardwareTelemetry.availableRamMb} MB now available).`;
+      showLumenToast(`Freed ${this.suiteState.hardwareTelemetry.lastMemoryTrimSavedMb} MB RAM`);
+      this.render();
+    });
     document.getElementById('btn-close-hardware-hud')?.addEventListener('click', () => {
       this.suiteState.hardwareHudModalOpen = false;
+      this.render();
+    });
+
+    document.getElementById('slider-hw-gpu-temp')?.addEventListener('change', (e) => {
+      const temp = parseFloat((e.target as HTMLInputElement).value);
+      this.suiteState.hardwareTelemetry = hardwareGovernor.setGpuTemperatureCelsius(temp);
+      this.studio.applyHardwareRenderScale(this.suiteState.hardwareTelemetry.pixelRatioScale);
+      this.suiteState.hardwareStatusBanner = `GPU Die Temperature set to ${this.suiteState.hardwareTelemetry.gpuTempCelsius.toFixed(
+        1
+      )}°C (${this.suiteState.hardwareTelemetry.thermalLevel}) -> ${
+        this.suiteState.hardwareTelemetry.targetFps
+      } FPS · ${this.suiteState.hardwareTelemetry.gpuClockMhz} MHz · ${Math.round(
+        this.suiteState.hardwareTelemetry.pixelRatioScale * 100
+      )}% Scale.`;
+      showLumenToast(
+        `GPU Temp: ${this.suiteState.hardwareTelemetry.gpuTempCelsius.toFixed(1)}°C (${
+          this.suiteState.hardwareTelemetry.thermalLevel
+        })`
+      );
       this.render();
     });
 
@@ -2850,7 +2895,11 @@ export class AppShell {
         if (lvl) {
           this.suiteState.hardwareTelemetry = hardwareGovernor.setThermalStatusLevel(lvl);
           this.studio.applyHardwareRenderScale(this.suiteState.hardwareTelemetry.pixelRatioScale);
-          this.suiteState.hardwareStatusBanner = `Simulated thermal state ${lvl} -> Target ${this.suiteState.hardwareTelemetry.targetFps} FPS (${this.suiteState.hardwareTelemetry.frameBudgetMs}ms budget).`;
+          this.suiteState.hardwareStatusBanner = `Simulated thermal state ${lvl} (${this.suiteState.hardwareTelemetry.gpuTempCelsius.toFixed(
+            1
+          )}°C · ${this.suiteState.hardwareTelemetry.gpuClockMhz} MHz) -> Target ${
+            this.suiteState.hardwareTelemetry.targetFps
+          } FPS (${this.suiteState.hardwareTelemetry.frameBudgetMs}ms budget).`;
           this.render();
         }
       });

@@ -6,16 +6,17 @@ All notable engineering milestones for **OmniStream XR Studio** are documented i
 
 ## [1.0.0] — 2026-11-10
 ### Added
-- **Practical Setup, Configuration & Operations Guide (`README.md`)**: Step-by-step installation, `.env` and Firebase configuration, development/production run scripts, test suite instructions, project maturity notes, and directory map.
+- **Live Hardware Telemetry HUD Component (`src/ui/HardwareTelemetryHud.ts` & `src/services/hardwareGovernor.ts`)**:
+  - Dedicated Top-Bar Telemetry Pill, collapsible bottom-right Floating Telemetry HUD (`#hw-telemetry-floating-hud`), and Governor Modal displaying real-time **Frame Rate** (`currentFps`, `1% Low FPS`, 24-sample frame-time sparkline), **Memory Usage** (`usedRamMb / 4096 MB`, `memoryUsagePercent%`, `availableRamMb MB Free`, segmented LPDDR4X bar), and **GPU Temperature & Clock** (`gpuTempCelsius°C`, `socTempCelsius°C`, `gpuClockMhz MHz`, `gpuLoadPercent%`, and `28–58°C` thermal sensor slider).
+- **Official Firebase Firestore Emulator Test Suite (`firestore.rules.test.ts`, `src/services/firestoreRulesHarness.ts`, `firebase.json`, `.firebaserc`)**:
+  - Replaced custom rules evaluator with the official **Firebase Firestore Emulator (`cloud-firestore-emulator-v1.22.0.jar`)** and `@firebase/rules-unit-testing`'s `initializeTestEnvironment` + `firebase/firestore` SDK (`12/12` test suites passing via `npm test` and `npm run test:emulator`).
+- **Practical Setup, Configuration & Operations Guide (`README.md`)**: Step-by-step installation, `.env` and Firebase configuration, development/production run scripts, emulator test instructions, project maturity notes, and directory map.
 - **Open-Source Licensing (`LICENSE`)**: Added standard MIT License and updated `package.json` metadata.
 - **4-Tier Firestore RBAC Enforcement (`firestore.rules` & `firestore.rules.test.ts`)**:
   - Replaced broad `exists(/admins/{uid})` checks with `hasStaffRole(allowedRoles)` verifying document existence, `targetUid == request.auth.uid`, and `role in allowedRoles` across `SUPER_ADMIN`, `ADMIN`, `GM`, and `MODERATOR`.
-  - Added behavioral role-hierarchy and mutation-sensitivity tests (`11/11` passing).
 
 ## [0.4.0] — 2026-11-10
 ### Added
-- **Behavioral Firestore Security Rules Engine (`src/services/firestoreRulesHarness.ts` & `firestore.rules.test.ts`)**:
-  - Compiled `firestore.rules` with `@firebase/eslint-plugin-security-rules/parser` (ANTLR4 AST) and verified all 12 "Dirty Dozen" adversarial payloads and 7-collection CRUD behaviors using `@firebase/rules-unit-testing` (`assertSucceeds` / `assertFails`).
 - **Zero-Trust Gemini API Security Governor (`src/services/serverSecurityGuard.ts` & `server.ts`)**:
   - Enforced RS256 Firebase ID Token verification on all 10 `/api/gemini/*` endpoints and `/live` WebSocket upgrades, sliding-window per-IP and per-user rate limiters, weighted daily quotas, scoped payload limits (`64kb` / `10mb`), and sanitized error envelopes.
 

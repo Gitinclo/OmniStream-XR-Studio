@@ -1,14 +1,15 @@
 /**
- * Firestore Security Rules Behavioral Test Suite
- * (Dirty Dozen + Full CRUD + 4-Tier Role Hierarchy Verification)
+ * Firestore Security Rules Emulator-Backed Behavioral Test Suite
+ * (Dirty Dozen + Full CRUD + 4-Tier Role Hierarchy + Emulator Verification)
  *
- * Executes real document operations (`getDoc`, `getDocs`, `setDoc`, `updateDoc`, `deleteDoc`)
- * against the ANTLR4-compiled `firestore.rules` AST and verifies outcomes with
- * `@firebase/rules-unit-testing`'s `assertSucceeds` and `assertFails`.
+ * Executes real Firestore SDK operations (`getDoc`, `getDocs`, `setDoc`, `updateDoc`, `deleteDoc`)
+ * against the official Firebase Firestore Emulator (`cloud-firestore-emulator`) using
+ * `@firebase/rules-unit-testing` (`initializeTestEnvironment`, `assertSucceeds`, `assertFails`).
  *
  * Verifies:
- * 1. All 12 "Dirty Dozen" adversarial payloads defined in `security_spec.md` return `PERMISSION_DENIED`.
- * 2. Positive ("Allowed") and negative ("Denied") behavioral invariants across all 7 collections:
+ * 1. Active connection to the official Firebase Firestore Emulator (`/emulator/v1/projects/{projectId}:securityRules`).
+ * 2. All 12 "Dirty Dozen" adversarial payloads defined in `security_spec.md` return `PERMISSION_DENIED`.
+ * 3. Positive ("Allowed") and negative ("Denied") behavioral invariants across all 7 collections:
  *    - `/videos/{videoId}`
  *    - `/videos/{videoId}/comments/{commentId}`
  *    - `/playlists/{playlistId}`
@@ -17,23 +18,21 @@
  *    - `/moderation_tickets/{ticketId}`
  *    - `/content_reports/{reportId}`
  *    - Global default-deny catch-all `/{document=**}`
- * 3. Strict 4-Tier Role Hierarchy (`SUPER_ADMIN` > `ADMIN` > `GM` > `MODERATOR`):
+ * 4. Strict 4-Tier Role Hierarchy (`SUPER_ADMIN` > `ADMIN` > `GM` > `MODERATOR`):
  *    - `hasStaffRole(allowedRoles)` inspects `get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role`
  *      and `data.targetUid == request.auth.uid` rather than granting blanket admin access on `exists()`.
  *    - Tests role-specific permissions and vertical/horizontal privilege-escalation blocks for each tier.
- * 4. Rule mutation sensitivity proof (proving tests evaluate actual rule behavior from `firestore.rules`).
+ * 5. Rule mutation sensitivity proof loaded into the Firebase Firestore Emulator.
  */
 
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-
 import {
-  initializeRulesTestEnvironment,
   assertSucceeds,
   assertFails,
-  doc,
-  collection,
+} from '@firebase/rules-unit-testing';
+import {
   query,
   where,
   getDoc,
@@ -42,10 +41,25 @@ import {
   updateDoc,
   deleteDoc,
   serverTimestamp,
-  customTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
+import {
+  initializeRulesTestEnvironment,
+  ensureFirestoreEmulator,
+  stopManagedFirestoreEmulator,
+  doc,
+  collection,
 } from './src/services/firestoreRulesHarness';
 
 const PRIMARY_ADMIN_EMAIL = 'creatergame31@gmail.com';
+
+before(async () => {
+  await ensureFirestoreEmulator();
+});
+
+after(async () => {
+  await stopManagedFirestoreEmulator();
+});
 
 function createValidVideoPayload(ownerId: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -162,11 +176,38 @@ function createValidContentReportPayload(
   };
 }
 
-test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md return PERMISSION_DENIED', async () => {
+test('Firebase Firestore Emulator Verification: Rules are compiled and served by the official Firebase Emulator', async () => {
+  const { host, port } = await ensureFirestoreEmulator();
+  const testEnv = await initializeRulesTestEnvironment({
+    projectId: 'demo-emulator-verify',
+  });
+
+  try {
+    const rootRes = await fetch(`http://${host}:${port}/`);
+    assert.equal(rootRes.ok, true);
+
+    const rulesRes = await fetch(
+      `http://${host}:${port}/emulator/v1/projects/${testEnv.projectId}:securityRules`
+    );
+    assert.equal(rulesRes.ok, true);
+    const rulesJson = (await rulesRes.json()) as {
+      rules?: { files?: Array<{ content?: string }> };
+    };
+    const activeRulesContent = rulesJson?.rules?.files?.[0]?.content || '';
+    assert.ok(
+      activeRulesContent.includes('function hasStaffRole(allowedRoles)'),
+      'Official Firebase Firestore Emulator must hold the loaded firestore.rules AST'
+    );
+  } finally {
+    await testEnv.cleanup();
+  }
+});
+
+test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md return PERMISSION_DENIED on the Firebase Emulator', async () => {
   const testEnv = await initializeRulesTestEnvironment();
 
   try {
-    // Seed baseline valid documents with security rules disabled
+    // Seed baseline valid documents with security rules disabled on the emulator
     await testEnv.withSecurityRulesDisabled(async (adminCtx) => {
       const db = adminCtx.firestore();
       await setDoc(doc(db, 'videos/vid_1'), createValidVideoPayload('uid_alice'));
@@ -266,7 +307,6 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
     await assertFails(getDoc(doc(aliceDb, 'videos/bad$id_123')));
 
     // 9. Dirty Dozen #9: Immutable Field Tampering (`ownerId` or `createdAt` modified on update)
-    testEnv.advanceClockMs(5000);
     await assertFails(
       updateDoc(doc(aliceDb, 'videos/vid_1'), {
         ownerId: 'uid_bob',
@@ -276,7 +316,7 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
     await assertFails(
       updateDoc(doc(aliceDb, 'videos/vid_1'), {
         title: 'Updated Title',
-        createdAt: serverTimestamp(),
+        createdAt: Timestamp.fromMillis(1_700_000_000_000),
         updatedAt: serverTimestamp(),
       })
     );
@@ -318,7 +358,7 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
       setDoc(
         doc(aliceDb, 'videos/vid_forged_ts'),
         createValidVideoPayload('uid_alice', {
-          createdAt: customTimestamp(1_600_000_000_000),
+          createdAt: Timestamp.fromMillis(1_600_000_000_000),
           updatedAt: serverTimestamp(),
         })
       )
@@ -380,7 +420,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       getDocs(query(collection(bobDb, 'videos'), where('ageRating', '==', 'ALL')))
     );
     // Bob (non-owner) can increment `views` by +1, but cannot edit Alice's video title or delete it
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(bobDb, 'videos/vid_100'), {
         views: 11,
@@ -396,7 +435,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
     await assertFails(deleteDoc(doc(bobDb, 'videos/vid_100')));
 
     // Alice (owner) can update her video metadata
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'videos/vid_100'), {
         title: '32K Spatial Cinema Masterclass (Director Cut)',
@@ -405,7 +443,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
     );
 
     // Primary Admin (`creatergame31@gmail.com`) can moderate `ageRating` on Alice's video
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(primaryAdminDb, 'videos/vid_100'), {
         ageRating: 'TEEN',
@@ -450,7 +487,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       getDocs(query(collection(aliceDb, 'playlists'), where('ownerId', '==', 'uid_alice')))
     );
     await assertFails(getDoc(doc(bobDb, 'playlists/pl_alice')));
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'playlists/pl_alice'), {
         name: 'Updated 32K Playlist',
@@ -463,7 +499,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       setDoc(doc(aliceDb, 'users/uid_alice'), createValidUserProfilePayload('uid_alice'))
     );
     await assertSucceeds(getDoc(doc(aliceDb, 'users/uid_alice')));
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'users/uid_alice'), {
         lastWatchedVideoId: 'vid_100',
@@ -496,7 +531,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       )
     );
     // Sender can update `message` while ticket is not `RESOLVED`
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'moderation_tickets/tkt_100'), {
         message: 'Updated ticket details with stream ID vid_100.',
@@ -512,7 +546,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
         )
       )
     );
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(primaryAdminDb, 'moderation_tickets/tkt_100'), {
         status: 'RESOLVED',
@@ -521,7 +554,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       })
     );
     // Once `RESOLVED`, Alice can no longer edit `message`, but Primary Admin CAN reopen/override
-    testEnv.advanceClockMs(1000);
     await assertFails(
       updateDoc(doc(aliceDb, 'moderation_tickets/tkt_100'), {
         message: 'Alice trying to edit after RESOLVED',
@@ -544,7 +576,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       )
     );
     // Reporter can update `details` while `status == 'OPEN'`
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'content_reports/rep_100'), {
         details: 'Updated timestamp of the issue at 04:15.',
@@ -564,7 +595,6 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
     );
     assert.equal(adminReportsSnap.docs.length, 1);
 
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(primaryAdminDb, 'content_reports/rep_100'), {
         status: 'ACTIONED',
@@ -734,7 +764,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     await assertFails(getDoc(doc(modDb, 'admins/uid_admin')));
 
     // 2. Moderator CANNOT create, update, or delete any `/admins/{id}` doc (no self-promotion or staff creation!)
-    testEnv.advanceClockMs(1000);
     await assertFails(
       updateDoc(doc(modDb, 'admins/uid_moderator'), {
         role: 'SUPER_ADMIN',
@@ -751,7 +780,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     await assertFails(deleteDoc(doc(modDb, 'admins/uid_gm')));
 
     // 3. Moderator CAN restrict `ageRating` on `/videos/vid_main`, but CANNOT edit `title` or delete the video
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(modDb, 'videos/vid_main'), {
         ageRating: 'MATURE',
@@ -776,7 +804,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
 
     // 5. Moderator CAN resolve `MODERATOR` category tickets, but CANNOT resolve `GM` or `ADMIN` category tickets,
     //    CANNOT reopen terminal `RESOLVED` tickets, and CANNOT delete tickets
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(modDb, 'moderation_tickets/tkt_mod_cat'), {
         status: 'IN_REVIEW',
@@ -808,7 +835,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     await assertFails(deleteDoc(doc(modDb, 'moderation_tickets/tkt_mod_cat')));
 
     // 6. Moderator CAN review active (`OPEN`/`IN_REVIEW`) content reports, but CANNOT override terminal `ACTIONED` reports or delete reports
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(modDb, 'content_reports/rep_active'), {
         status: 'IN_REVIEW',
@@ -848,7 +874,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
 
     // 2. GM CAN update full video metadata (`title`, `description`, `category`, `resolution`, `ageRating`),
     //    but CANNOT delete `/videos/vid_main`
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(gmDb, 'videos/vid_main'), {
         title: '32K Spatial Cinema Masterclass [GM Verified]',
@@ -860,7 +885,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     await assertFails(deleteDoc(doc(gmDb, 'videos/vid_main')));
 
     // 3. GM CAN resolve `GM` category tickets, but CANNOT resolve `ADMIN` category tickets or reopen `RESOLVED` tickets
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(gmDb, 'moderation_tickets/tkt_gm_cat'), {
         status: 'RESOLVED',
@@ -889,14 +913,12 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     // =========================================================================
     // 1. ADMIN CAN read other `/admins` docs and CAN create/update/delete `GM` and `MODERATOR` roles
     await assertSucceeds(getDoc(doc(adminDb, 'admins/uid_moderator')));
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       setDoc(
         doc(adminDb, 'admins/uid_new_mod'),
         createValidAdminRolePayload('uid_new_mod', 'uid_admin', { role: 'MODERATOR' })
       )
     );
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(adminDb, 'admins/uid_new_mod'), {
         role: 'GM',
@@ -907,7 +929,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
 
     // 2. ADMIN CANNOT create a `SUPER_ADMIN` or `ADMIN`, CANNOT promote `uid_new_mod` to `ADMIN` or `SUPER_ADMIN`,
     //    and CANNOT update or delete `uid_super_admin` or `uid_admin`
-    testEnv.advanceClockMs(1000);
     await assertFails(
       setDoc(
         doc(adminDb, 'admins/uid_rogue_super'),
@@ -939,7 +960,6 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
 
     // 3. ADMIN CAN delete subordinate `GM`/`MODERATOR` staff, resolve `ADMIN` tickets, reopen terminal tickets/reports, and delete videos
     await assertSucceeds(deleteDoc(doc(adminDb, 'admins/uid_new_mod')));
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(adminDb, 'moderation_tickets/tkt_admin_cat'), {
         status: 'RESOLVED',
@@ -967,14 +987,12 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
     // =========================================================================
     // E. Tier 1 (`SUPER_ADMIN`): Full authority over `/admins` including `ADMIN` and `SUPER_ADMIN` tiers
     // =========================================================================
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       setDoc(
         doc(superAdminDb, 'admins/uid_promoted_admin'),
         createValidAdminRolePayload('uid_promoted_admin', 'uid_super_admin', { role: 'ADMIN' })
       )
     );
-    testEnv.advanceClockMs(1000);
     await assertSucceeds(
       updateDoc(doc(superAdminDb, 'admins/uid_promoted_admin'), {
         role: 'SUPER_ADMIN',
@@ -988,7 +1006,7 @@ test('Role Hierarchy & Least-Privilege Matrix: SUPER_ADMIN vs ADMIN vs GM vs MOD
   }
 });
 
-test('Rule Mutation Sensitivity Proof: Weakening firestore.rules expressions changes runtime evaluation outcomes', async () => {
+test('Rule Mutation Sensitivity Proof on Firebase Emulator: Weakening firestore.rules expressions changes emulator evaluation outcomes', async () => {
   const productionRules = fs.readFileSync('firestore.rules', 'utf8');
 
   // 1. Mutate `isVerifiedUser()` by removing `&& request.auth.token.email_verified == true`
@@ -1005,16 +1023,21 @@ test('Rule Mutation Sensitivity Proof: Weakening firestore.rules expressions cha
   );
   assert.notEqual(broadAdminWeakRules, productionRules);
 
-  const prodEnv = await initializeRulesTestEnvironment({ rulesSource: productionRules });
+  const prodEnv = await initializeRulesTestEnvironment({
+    projectId: 'demo-mutation-prod',
+    rulesSource: productionRules,
+  });
   const unverifiedWeakEnv = await initializeRulesTestEnvironment({
+    projectId: 'demo-mutation-unverified',
     rulesSource: unverifiedWeakRules,
   });
   const broadAdminWeakEnv = await initializeRulesTestEnvironment({
+    projectId: 'demo-mutation-broad-admin',
     rulesSource: broadAdminWeakRules,
   });
 
   try {
-    // Proof A: `email_verified` enforcement
+    // Proof A: `email_verified` enforcement on the official Firebase Emulator
     const spooferInProd = prodEnv
       .authenticatedContext('uid_spoofer', {
         email: PRIMARY_ADMIN_EMAIL,
@@ -1069,7 +1092,7 @@ test('Rule Mutation Sensitivity Proof: Weakening firestore.rules expressions cha
       )
     );
 
-    // Weakened rules (where `data.role in allowedRoles` was removed) allow both — proving the role check is actively enforced!
+    // Weakened rules (where `data.role in allowedRoles` was removed) allow both — proving the role check is actively enforced by the Firebase Emulator!
     await assertSucceeds(deleteDoc(doc(modInBroadWeak, 'videos/vid_1')));
     await assertSucceeds(
       setDoc(

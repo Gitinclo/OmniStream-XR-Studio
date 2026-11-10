@@ -13,7 +13,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "lint:rules": "eslint firestore.rules",
-    "test": "tsx --test firestore.rules.test.ts src/services/suite.test.ts"
+    "test": "tsx --test firestore.rules.test.ts src/services/suite.test.ts",
+    "test:emulator": "firebase emulators:exec --only firestore --project demo-omnistream-xr \"tsx --test firestore.rules.test.ts\""
   },
   "dependencies": {
     "@dimforge/rapier3d-simd-compat": "^0.19.3",

@@ -270,22 +270,22 @@ export const COMPLIANCE_DOCS_CATALOG: ComplianceDocEntry[] = [
   {
     filename: 'README.md',
     title: 'Practical Setup, Testing & Architecture Guide',
-    badge: 'SETUP · TEST · ARCHITECTURE · MIT',
+    badge: 'SETUP · EMULATOR TEST · MIT',
     frameworksCovered: [
       'Quick Start & .env Config',
       'WebXR / XR Blocks v0.24',
       'AES-256-GCM + AAD',
       'Zero-Trust Gemini API Guard',
-      '4-Tier Firestore RBAC & AST Rules Engine',
+      '4-Tier RBAC & Firebase Emulator Tests',
     ],
     summary:
-      'Step-by-step installation, .env and Firebase configuration, dev/prod server commands, 11-suite test runner (npm test), project maturity history, 4-Tier RBAC matrix, and MIT License.',
+      'Step-by-step installation, .env and Firebase configuration, dev/prod server commands, 12-suite Firebase Firestore Emulator test runner (npm test / npm run test:emulator), project maturity history, 4-Tier RBAC matrix, and MIT License.',
     markdownContent: `# OmniStream XR Studio — Setup, Operations & Architecture Guide
 
 **License:** MIT (\`LICENSE\`) · **Version:** \`1.0.0\` · **Changelog:** \`CHANGELOG.md\`
 
 ## 1. Project Maturity & Quick Start
-- **Status (\`v1.0.0\`)**: Exported as a squashed release snapshot from Google AI Studio Build with 11 automated behavioral & unit test suites (\`npm test\`), strict TypeScript linting (\`npm run lint\`), and ESLint-verified Firestore Security Rules (\`npm run lint:rules\`).
+- **Status (\`v1.0.0\`)**: Exported as a squashed release snapshot from Google AI Studio Build with 12 automated test suites (\`npm test\`) backed by the official **Firebase Firestore Emulator** (\`cloud-firestore-emulator\`), strict TypeScript linting (\`npm run lint\`), and ESLint-verified Firestore Security Rules (\`npm run lint:rules\`).
 - **Guest Mode vs. Authenticated Cloud Mode**: Works out-of-the-box in Guest Mode for local 3D WebXR, Lumen Video, Bioscience 3D, AES-256-GCM Vault, 90Hz Telemetry HUD, and VibePitch Studio; Google Sign-In unlocks cloud Firestore sync, YouTube Likes, and authenticated \`/api/gemini/*\` + \`/live\` AI endpoints.
 
 ## 2. Installation, Configuration & Run Instructions
@@ -299,8 +299,9 @@ cp .env.example .env
 # 3. Start development server on http://localhost:3000
 npm run dev
 
-# 4. Run all 11 behavioral Firestore rules & service unit tests
+# 4. Run all 12 Firebase Emulator-backed Firestore rules & service unit tests
 npm test
+npm run test:emulator
 
 # 5. Lint Firestore rules & TypeScript, and build for production
 npm run lint:rules
@@ -311,16 +312,16 @@ npm run build && npm start
 ## 3. Seven Core Architectural Pillars
 1. **Server-Side Gemini API Security & Rate-Limiting Governor (\`/src/services/serverSecurityGuard.ts\` & \`/server.ts\`)**:
    - Cryptographic RS256 Firebase ID Token verification on all 10 \`/api/gemini/*\` routes and \`/live\` WebSocket upgrades, per-IP and per-user sliding-window rate limits, weighted daily quotas, and sanitized \`{ error, code, requestId }\` responses.
-2. **Behavioral Firestore Security Rules Execution Engine, Dirty Dozen Suite & 4-Tier RBAC (\`/firestore.rules\`, \`/src/services/firestoreRulesHarness.ts\`, \`/firestore.rules.test.ts\`)**:
-   - Compiles \`/firestore.rules\` into an executable ANTLR4 AST and evaluates live CRUD requests with \`@firebase/rules-unit-testing\`'s \`assertSucceeds()\` and \`assertFails()\`.
+2. **Firebase Emulator-Backed Firestore Security Rules, Dirty Dozen Suite & 4-Tier RBAC (\`/firestore.rules\`, \`/src/services/firestoreRulesHarness.ts\`, \`/firestore.rules.test.ts\`)**:
+   - Loads \`/firestore.rules\` into the official \`cloud-firestore-emulator\` via \`@firebase/rules-unit-testing\`'s \`initializeTestEnvironment()\` and evaluates live \`firebase/firestore\` CRUD requests with \`assertSucceeds()\` and \`assertFails()\`.
    - Enforces a role-verified 4-tier RBAC hierarchy (\`SUPER_ADMIN\` > \`ADMIN\` > \`GM\` > \`MODERATOR\`) via \`hasStaffRole(allowedRoles)\`.
 3. **AES-256-GCM Authenticated Encryption Engine (\`/src/services/cryptoAes256.ts\`)**:
    - Native WebCrypto \`AES-256-GCM\` with 256-bit keys, 12-byte CSPRNG IVs, 128-bit auth tags, \`AAD\` binding (\`user_id:<uid>|record_id:<id>\`), and 64 KB chunked streaming.
-4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB RAM) Hardware Governor (\`/src/services/hardwareGovernor.ts\`)**:
-   - Real-time 90Hz (\`11.1ms\`) and 60Hz (\`16.6ms\`) frame pacing monitor, \`SAVER_720P_SCALE\` GPU downscaling, and 4GB LPDDR4X RAM floor trim.
+4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB RAM) Hardware Telemetry Governor & Live HUD (\`/src/services/hardwareGovernor.ts\` & \`/src/ui/HardwareTelemetryHud.ts\`)**:
+   - Real-time **Frame Rate** (\`currentFps\`, \`1% Low FPS\`, 24-sample frame-time sparkline), **4GB LPDDR4X Memory Usage** (\`usedRamMb / 4096 MB\`, \`memoryUsagePercent%\`, \`availableRamMb MB Free\`, and one-click/auto RAM trim), and **ARM Mali-G57 MC2 GPU Temperature & Clock** (\`gpuTempCelsius°C\`, \`socTempCelsius°C\`, \`gpuClockMhz MHz\`, \`gpuLoadPercent%\`, and interactive \`28–58°C\` thermal simulator) displayed in the Top-Bar Telemetry Pill, collapsible bottom-right Floating Telemetry HUD, and Hardware Governor Modal.
 5. **VibePitch Studio 7-Vertical Quote & Script Engine (\`/src/services/vibePitchEngine.ts\`)**:
    - Deterministic \`InputBoundsValidator\`, 7 commercial vertical presets, 6-channel pitch script generator, and 30-day guest-to-cloud lifecycle evaluation.
-6. **Spatial WebXR 32K Cinema, Lumen Video & YouTube Data API v3 (\`/src/scene/SpatialStudio.ts\`, \`/src/ui/LumenView.ts\`)**:
+6. **Spatial WebXR 32K Cinema, Lumen Video & YouTube Data API v3 (\`/src/scene/SpatialStudio.ts\`, \`/src/ui/LumenPlatformView.ts\`)**:
    - 8-part composite 3D Broadcast Rig, 36-node \`InstancedMesh\` CDN ring, AlphaFold pLDDT 3D molecular viewer, Lumen Video Platform, and OAuth 2.0 YouTube Likes manager.
 7. **Admin, GM & Moderator Governance (\`creatergame31@gmail.com\`)**:
    - Full role-based access control (\`/admins\`, \`/moderation_tickets\`, \`/content_reports\`) supervised by Primary Admin \`creatergame31@gmail.com\`.`,
@@ -332,11 +333,11 @@ npm run build && npm start
     frameworksCovered: [
       'NIST SP 800-38D (AES-GCM)',
       'RS256 Firebase JWT Verification',
-      '4-Tier Firestore RBAC & AST Engine',
+      '4-Tier RBAC & Firebase Emulator Tests',
       'OWASP Top 10 & Error Sanitization',
     ],
     summary:
-      'Defines the AES-256-GCM cryptographic envelope, AAD binding, RS256 Firebase ID token authentication on /api/gemini/* and /live, 4-tier Firestore RBAC (SUPER_ADMIN > ADMIN > GM > MODERATOR), and behavioral AST verification.',
+      'Defines the AES-256-GCM cryptographic envelope, AAD binding, RS256 Firebase ID token authentication on /api/gemini/* and /live, 4-tier Firestore RBAC (SUPER_ADMIN > ADMIN > GM > MODERATOR), and official Firebase Firestore Emulator verification.',
     markdownContent: `# Security Policy & Cryptographic Specification (SECURITY.md)
 
 ## 1. Authenticated Encryption Standard (NIST SP 800-38D)
@@ -352,9 +353,9 @@ npm run build && npm start
 - **Sliding-Window Rate Limiting & Weighted Quotas**: Per-IP (\`30 req/min\`) and per-user/per-endpoint rate limits (\`2 req/min\` video, \`4 req/min\` image/music, \`6–15 req/min\` speech/vision/chat) plus weighted daily quotas (\`250 units/day\` user, \`1,000 units/day\` admin, \`5,000 units/day\` global) and \`/live\` WebSocket concurrency caps (\`1\` session/user).
 - **Error Sanitization & Log Redaction**: Raw \`error.message\` and stack traces are never returned to clients; responses use safe \`{ error, code, requestId }\` envelopes and server logs redact keys/tokens.
 
-## 3. 4-Tier Role-Based Access Control & Behavioral Firestore Rules Verification (\`/firestore.rules\` & \`/firestore.rules.test.ts\`)
+## 3. 4-Tier Role-Based Access Control & Firebase Emulator Verification (\`/firestore.rules\` & \`/firestore.rules.test.ts\`)
 - **Role-Verified Staff Lookup (\`hasStaffRole(allowedRoles)\`)**: Validates \`exists(/databases/$(database)/documents/admins/$(request.auth.uid))\`, \`get(...).data.targetUid == request.auth.uid\`, and \`get(...).data.role in allowedRoles\` across 4 least-privilege tiers (\`isSuperAdmin()\`, \`isAdmin()\`, \`isGM()\`, \`isModerator()\`).
-- **Executable AST Rule Evaluation**: Compiles \`/firestore.rules\` with \`@firebase/eslint-plugin-security-rules/parser\` and verifies real CRUD operations across all 12 Dirty Dozen payloads, all 7 collections, and all 4 staff tiers using \`@firebase/rules-unit-testing\`'s \`assertSucceeds()\` and \`assertFails()\`.
+- **Official Firebase Firestore Emulator Evaluation**: Loads \`/firestore.rules\` into the official \`cloud-firestore-emulator\` via \`@firebase/rules-unit-testing\`'s \`initializeTestEnvironment()\` and verifies real \`firebase/firestore\` CRUD operations across all 12 Dirty Dozen payloads, all 7 collections, and all 4 staff tiers using \`assertSucceeds()\` and \`assertFails()\`.
 
 ## 4. OAuth 2.0 & Secret Hygiene
 - Google Workspace and YouTube Data API v3 OAuth 2.0 access tokens are cached strictly in volatile memory (\`cachedAccessToken\`) and never written to \`localStorage\` or \`sessionStorage\`.

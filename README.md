@@ -8,7 +8,7 @@
 
 ## 1. Project Maturity & Repository History
 
-- **Current Status (`v1.0.0`)**: Feature-complete reference application with 11 automated test suites (`npm test`), strict TypeScript type-checking (`npm run lint`), and ESLint-verified Firestore Security Rules (`npm run lint:rules`).
+- **Current Status (`v1.0.0`)**: Feature-complete reference application with 12 automated test suites (`npm test`) including official **Firebase Firestore Emulator** (`cloud-firestore-emulator`) security rules verification (`npm run test:emulator`), strict TypeScript type-checking (`npm run lint`), and ESLint-verified Firestore Security Rules (`npm run lint:rules`).
 - **Why the Git Commit History is Compact**: This codebase was iteratively developed, tested, and verified inside **Google AI Studio Build** and exported to GitHub as a squashed release snapshot. See [CHANGELOG.md](./CHANGELOG.md) and [ROADMAP.md](./ROADMAP.md) for the milestone history (`v0.1.0` through `v1.0.0`).
 - **Guest Mode vs. Authenticated Cloud Mode**:
   - **Without Google Sign-In (Guest Mode)**: You can immediately explore the 3D WebXR Broadcast Rig, Lumen Video catalog, Bioscience 3D PDB/AlphaFold viewer, local AES-256-GCM Vault, 90Hz Hardware Telemetry HUD, VibePitch Studio quote calculator, and Compliance Hub locally in your browser.
@@ -19,6 +19,7 @@
 ## 2. Prerequisites
 
 - **Node.js**: `v20.12+` or `v22.6+` recommended (`node --version`)
+- **Java Runtime (for Firestore Emulator tests)**: OpenJDK `21+` (`java -version`) and `firebase-tools` (`firebase --version`). The test harness (`src/services/firestoreRulesHarness.ts`) also auto-detects or bootstraps the OpenJDK 21 runtime and `cloud-firestore-emulator` binary if missing.
 - **Package Manager**: `npm` (v10+) or `bun`
 - **Browser / Device**:
   - **Desktop**: Chrome, Edge, or Brave with WebGL2 enabled (includes built-in XR Blocks desktop simulator controls).
@@ -62,8 +63,8 @@ NODE_ENV=development
 
 > **Security Note**: `GEMINI_API_KEY` is read exclusively by the Express backend (`server.ts`) via `process.env.GEMINI_API_KEY` and is never exposed to client bundles.
 
-### 4.2 Firebase & Firestore Configuration (`firebase-applet-config.json`)
-The repository includes `firebase-applet-config.json` pointing to the provisioned Firestore database:
+### 4.2 Firebase & Firestore Configuration (`firebase-applet-config.json` & `firebase.json`)
+The repository includes `firebase-applet-config.json` pointing to the provisioned Firestore database, and `firebase.json` / `.firebaserc` configuring the local Firebase Firestore Emulator (`127.0.0.1:8088`):
 - **Firebase Project ID**: `gen-lang-client-0029274497`
 - **Firestore Database ID**: `ai-studio-omnistreamxrstud-a6cf2a14-c6a4-4108-9996-97e7f2404f11`
 - **Bootstrapped Super-Admin / GM / Moderator Email**: `creatergame31@gmail.com`
@@ -100,33 +101,37 @@ npm start
 
 ---
 
-## 6. Running Tests & Linting
+## 6. Running Tests & Linting (Firebase Emulator-Backed)
 
-All tests run entirely in Node.js with zero external emulator processes required:
+All Firestore Security Rules tests execute directly against the **official Firebase Firestore Emulator (`cloud-firestore-emulator`)** using `@firebase/rules-unit-testing` (`initializeTestEnvironment`, `assertSucceeds`, `assertFails`) and the `firebase/firestore` client SDK (`getDoc`, `getDocs`, `setDoc`, `updateDoc`, `deleteDoc`, `serverTimestamp`, `Timestamp`):
 
 ```bash
-# 1. Run all 11 behavioral Firestore Security Rules & service unit test suites
+# 1. Run all 12 test suites (auto-starts or connects to the Firebase Firestore Emulator on 127.0.0.1:8088)
 npm test
 
-# 2. Lint Firestore Security Rules with @firebase/eslint-plugin-security-rules
+# 2. Or run the Firestore rules suite explicitly via `firebase emulators:exec`
+npm run test:emulator
+
+# 3. Lint Firestore Security Rules with @firebase/eslint-plugin-security-rules
 npm run lint:rules
 
-# 3. Run TypeScript static type-checking across client, server, and tests
+# 4. Run TypeScript static type-checking across client, server, and tests
 npm run lint
 ```
 
-### What `npm test` Verifies (11 Test Suites)
-1. **Dirty Dozen `#1–#12` Adversarial Suite (`firestore.rules.test.ts`)**: Compiles `firestore.rules` into an executable ANTLR4 AST and verifies that all 12 adversarial attacks in [`security_spec.md`](./security_spec.md) return `PERMISSION_DENIED`.
-2. **Behavioral CRUD & RBAC Across All 7 Collections (`firestore.rules.test.ts`)**: Tests allowed (`assertSucceeds`) and denied (`assertFails`) `getDoc`, `getDocs`, `setDoc`, `updateDoc`, and `deleteDoc` operations on `/videos`, `/videos/{videoId}/comments`, `/playlists`, `/users`, `/admins`, `/moderation_tickets`, `/content_reports`, and `/{document=**}`.
-3. **4-Tier Role Hierarchy & Least-Privilege Matrix (`firestore.rules.test.ts`)**: Verifies `SUPER_ADMIN` vs. `ADMIN` vs. `GM` vs. `MODERATOR` vs. invalid `/admins` documents.
-4. **Rule Mutation Sensitivity Proof (`firestore.rules.test.ts`)**: Proves that weakening expressions in `firestore.rules` changes runtime test outcomes.
-5. **AES-256-GCM + AAD Encryption & Tamper Rejection (`src/services/suite.test.ts`)**: Verifies 256-bit WebCrypto encryption, unique 12-byte IVs, and `AEADBadTagException` on AAD or ciphertext tampering.
-6. **AES-256-GCM 64 KB Chunked Streaming (`src/services/suite.test.ts`)**: Verifies multi-chunk stream encryption and counter-bound AAD reassembly.
-7. **Realme 8 5G (90Hz / 4GB RAM) Hardware Governor (`src/services/suite.test.ts`)**: Verifies `11.11ms` (90Hz) and `16.67ms` (60Hz) frame budgets, thermal fallback, `720p` scaling, and memory trim.
-8. **VibePitch Studio Engine & 30-Day Guest Lifecycle (`src/services/suite.test.ts`)**: Verifies `InputBoundsValidator`, 7 vertical presets, 6 outreach scripts, and 30-day guest-to-cloud state transitions.
-9. **100 Vibe Coding Guardrails & 8 Compliance Docs Completeness (`src/services/suite.test.ts`)**: Verifies all 100 guardrails (`#1–#100`) and 8 compliance specifications.
-10. **Server Security Guard — RS256 Firebase JWT Verification (`src/services/suite.test.ts`)**: Verifies cryptographic RS256 signature validation, audience/issuer/expiry checks, and Bearer/WebSocket token extraction.
-11. **Server Security Guard — Rate Limiting, Quotas & Error Sanitization (`src/services/suite.test.ts`)**: Verifies per-IP and per-user sliding-window rate limits, weighted daily quotas, `/live` WebSocket concurrency caps, and error redaction.
+### What `npm test` Verifies (12 Test Suites)
+1. **Firebase Firestore Emulator Verification (`firestore.rules.test.ts`)**: Verifies active HTTP connection to the official `cloud-firestore-emulator` (`/emulator/v1/projects/{projectId}:securityRules`) and confirms `firestore.rules` is compiled and loaded by the emulator.
+2. **Dirty Dozen `#1–#12` Adversarial Suite on Firebase Emulator (`firestore.rules.test.ts`)**: Executes all 12 adversarial payloads in [`security_spec.md`](./security_spec.md) against the Firebase Firestore Emulator and verifies every attack returns `PERMISSION_DENIED`.
+3. **Behavioral CRUD & RBAC Across All 7 Collections on Firebase Emulator (`firestore.rules.test.ts`)**: Tests allowed (`assertSucceeds`) and denied (`assertFails`) `getDoc`, `getDocs`, `setDoc`, `updateDoc`, and `deleteDoc` operations on `/videos`, `/videos/{videoId}/comments`, `/playlists`, `/users`, `/admins`, `/moderation_tickets`, `/content_reports`, and `/{document=**}`.
+4. **4-Tier Role Hierarchy & Least-Privilege Matrix on Firebase Emulator (`firestore.rules.test.ts`)**: Verifies `SUPER_ADMIN` vs. `ADMIN` vs. `GM` vs. `MODERATOR` vs. invalid `/admins` documents on the Firebase Emulator.
+5. **Rule Mutation Sensitivity Proof on Firebase Emulator (`firestore.rules.test.ts`)**: Loads mutated rulesets into the Firebase Firestore Emulator to prove that weakening `isVerifiedUser()` or `hasStaffRole(allowedRoles)` flips test outcomes from denied to allowed.
+6. **AES-256-GCM + AAD Encryption & Tamper Rejection (`src/services/suite.test.ts`)**: Verifies 256-bit WebCrypto encryption, unique 12-byte IVs, and `AEADBadTagException` on AAD or ciphertext tampering.
+7. **AES-256-GCM 64 KB Chunked Streaming (`src/services/suite.test.ts`)**: Verifies multi-chunk stream encryption and counter-bound AAD reassembly.
+8. **Realme 8 5G (90Hz / 4GB RAM) Hardware Governor & Telemetry HUD (`src/services/suite.test.ts`, `src/ui/HardwareTelemetryHud.ts`)**: Verifies live Frame Rate (`currentFps`, `onePercentLowFps`, 24-sample frame-time sparkline), 4GB LPDDR4X Memory Usage (`usedRamMb`, `memoryUsagePercent`, `availableRamMb`, RAM trim), and ARM Mali-G57 MC2 GPU Temperature (`gpuTempCelsius°C`, `socTempCelsius°C`, `gpuClockMhz`, `gpuLoadPercent`, `setGpuTemperatureCelsius()`), plus Top-Bar pill, Floating HUD, and Governor Modal rendering.
+9. **VibePitch Studio Engine & 30-Day Guest Lifecycle (`src/services/suite.test.ts`)**: Verifies `InputBoundsValidator`, 7 vertical presets, 6 outreach scripts, and 30-day guest-to-cloud state transitions.
+10. **100 Vibe Coding Guardrails & 8 Compliance Docs Completeness (`src/services/suite.test.ts`)**: Verifies all 100 guardrails (`#1–#100`) and 8 compliance specifications.
+11. **Server Security Guard — RS256 Firebase JWT Verification (`src/services/suite.test.ts`)**: Verifies cryptographic RS256 signature validation, audience/issuer/expiry checks, and Bearer/WebSocket token extraction.
+12. **Server Security Guard — Rate Limiting, Quotas & Error Sanitization (`src/services/suite.test.ts`)**: Verifies per-IP and per-user sliding-window rate limits, weighted daily quotas, `/live` WebSocket concurrency caps, and error redaction.
 
 ---
 
@@ -135,7 +140,9 @@ npm run lint
 ```text
 ├── server.ts                         # Express + WebSocket (/live) server with RS256 JWT & quota guard
 ├── firestore.rules                   # Production Firestore Security Rules (4-tier RBAC + schema guards)
-├── firestore.rules.test.ts           # Behavioral Firestore Rules test suite (Dirty Dozen + 4-tier RBAC)
+├── firestore.rules.test.ts           # Emulator-backed Firestore Rules test suite (@firebase/rules-unit-testing)
+├── firebase.json                     # Firebase CLI & Firestore Emulator configuration (127.0.0.1:8088)
+├── .firebaserc                       # Firebase project alias configuration
 ├── firebase-blueprint.json           # Canonical entity JSON schemas and collection path mappings
 ├── firebase-applet-config.json       # Firebase client SDK configuration
 ├── security_spec.md                  # Phase 0 Security TDD specification & Dirty Dozen payloads
@@ -148,18 +155,20 @@ npm run lint
     │   └── SpatialStudio.ts          # WebXR 3D Broadcast Rig, 36-node CDN ring & PDB molecular viewer
     ├── services/
     │   ├── serverSecurityGuard.ts    # RS256 Firebase ID token verifier, rate limiter & quota governor
-    │   ├── firestoreRulesHarness.ts  # ANTLR4 AST compiler & behavioral evaluator for firestore.rules
+    │   ├── firestoreRulesHarness.ts  # Firebase Firestore Emulator lifecycle manager & @firebase/rules-unit-testing harness
     │   ├── firebase.ts               # Firebase Auth, Firestore CRUD helpers & error handler
     │   ├── cryptoAes256.ts           # NIST SP 800-38D WebCrypto AES-256-GCM + AAD engine
-    │   ├── hardwareGovernor.ts       # 90Hz/60Hz frame governor, 720p scaler & 4GB RAM monitor
+    │   ├── hardwareGovernor.ts       # 90Hz/60Hz frame governor, GPU temp/clock monitor & 4GB RAM governor
     │   ├── vibePitchEngine.ts        # 7-vertical quote calculator, bounds validator & 6-script engine
     │   ├── complianceAndGuardrails.ts# 100 Vibe Coding Guardrails & 8-Document Compliance catalog
     │   ├── youtube.ts                # YouTube Data API v3 Liked Videos & quota telemetry service
     │   ├── catalog.ts                # Deterministic seed streams, codecs & spatial audio presets
-    │   └── suite.test.ts             # Unit test suite for all pure domain & security services
+    │   └── suite.test.ts             # Unit test suite for all pure domain, HUD & security services
     └── ui/
         ├── AppShell.ts               # Main 2D HUD, modals, Gemini AI studio & Admin/GM console
-        └── LumenView.ts              # Lumen Video Platform player, search, comments & playlists UI
+        ├── HardwareTelemetryHud.ts   # Live Frame Rate, 4GB RAM Memory Usage & GPU Temp HUD component
+        ├── ComplianceAndHardwareModals.ts # Compliance Hub, Hardware Governor Modal & AES-256 Vault UI
+        └── LumenPlatformView.ts      # Lumen Video Platform player, search, comments & playlists UI
 ```
 
 ---
@@ -168,11 +177,11 @@ npm run lint
 
 ### 8.1 Seven Core Architectural Pillars
 1. **Server-Side Gemini API Security Governor (`src/services/serverSecurityGuard.ts` & `server.ts`)**: Mandatory RS256 Firebase ID Token verification on all 10 `/api/gemini/*` routes and `/live` WebSocket upgrades, sliding-window rate limits, weighted daily quotas, `64kb`/`10mb` body caps, and sanitized `{ error, code, requestId }` responses.
-2. **Behavioral Firestore Security Rules Engine & 4-Tier RBAC (`firestore.rules`, `src/services/firestoreRulesHarness.ts`, `firestore.rules.test.ts`)**: Executable ANTLR4 AST evaluation and strict role verification via `hasStaffRole(allowedRoles)` across `SUPER_ADMIN`, `ADMIN`, `GM`, and `MODERATOR`.
+2. **Firebase Emulator-Backed Firestore Security Rules & 4-Tier RBAC (`firestore.rules`, `src/services/firestoreRulesHarness.ts`, `firestore.rules.test.ts`)**: Official `cloud-firestore-emulator` + `@firebase/rules-unit-testing` verification and strict role enforcement via `hasStaffRole(allowedRoles)` across `SUPER_ADMIN`, `ADMIN`, `GM`, and `MODERATOR`.
 3. **AES-256-GCM Authenticated Encryption Engine (`src/services/cryptoAes256.ts`)**: WebCrypto `AES-256-GCM` with 12-byte CSPRNG IVs, 128-bit auth tags, `user_id:<uid>|record_id:<id>` AAD binding, and 64 KB chunked streaming.
-4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB LPDDR4X RAM) Hardware Governor (`src/services/hardwareGovernor.ts`)**: Zero-GC `Float32Array(120)` frame-pacing ring buffers, `SAVER_720P_SCALE` GPU downscaling, and `750 MB` RAM floor trim.
+4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB LPDDR4X RAM) Hardware Telemetry Governor & Live HUD (`src/services/hardwareGovernor.ts` & `src/ui/HardwareTelemetryHud.ts`)**: Real-time **Frame Rate** (`currentFps`, `1% Low FPS`, 24-frame sparkline from a zero-GC `Float32Array(120)` ring buffer), **Memory Usage** (`usedRamMb / 4096 MB`, `memoryUsagePercent%`, `availableRamMb MB Free`, segmented LPDDR4X bar, and one-click/auto `Level 80` RAM trim), and **GPU Temperature & Clock** (`gpuTempCelsius°C`, `socTempCelsius°C`, `gpuClockMhz MHz`, `gpuLoadPercent%` load, interactive `28–58°C` thermal sensor simulator, `45°C` 60Hz throttle, and `50°C` `SAVER_720P_SCALE` downscaling) rendered via a Top-Bar Telemetry Pill, a collapsible bottom-right Floating Telemetry HUD (`#hw-telemetry-floating-hud`), and the full Hardware Governor Modal.
 5. **VibePitch Studio 7-Vertical Quote & Script Engine (`src/services/vibePitchEngine.ts`)**: `InputBoundsValidator`, 7 local business verticals, 6 outreach scripts, and 30-day guest-to-cloud lifecycle.
-6. **Spatial WebXR 32K Studio, Lumen Video & YouTube Data API v3 (`src/scene/SpatialStudio.ts`, `src/ui/LumenView.ts`, `src/services/youtube.ts`)**: 8-part 3D Broadcast Rig, 36-node `InstancedMesh` CDN ring, RCSB PDB / AlphaFold molecular viewer, and OAuth 2.0 YouTube Likes manager.
+6. **Spatial WebXR 32K Studio, Lumen Video & YouTube Data API v3 (`src/scene/SpatialStudio.ts`, `src/ui/LumenPlatformView.ts`, `src/services/youtube.ts`)**: 8-part 3D Broadcast Rig, 36-node `InstancedMesh` CDN ring, RCSB PDB / AlphaFold molecular viewer, and OAuth 2.0 YouTube Likes manager.
 7. **Admin / GM / Moderator Governance & Global Compliance Hub (`src/services/firebase.ts`, `src/services/complianceAndGuardrails.ts`)**: Supervised by `creatergame31@gmail.com` with 100 Vibe Coding Guardrails and 8 compliance docs.
 
 ### 8.2 Firestore 4-Tier RBAC Permission Matrix (`firestore.rules`)
