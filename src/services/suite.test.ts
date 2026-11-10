@@ -50,6 +50,14 @@ import {
   clampPromptText,
 } from './serverSecurityGuard';
 
+import {
+  SUBSCRIPTION_PLANS,
+  computeAnnualSavingsPercent,
+  computeEffectiveMonthlyPriceUsd,
+  computePlanPeriodPriceUsd,
+  buildSubscriptionCheckoutResult,
+} from './subscriptionEngine';
+
 test('AES-256-GCM + AAD encrypts and decrypts with unique 12B IV and rejects tampered AAD', async () => {
   const aad = buildCanonicalAadContext('creatergame31@gmail.com', 'vault_rec_01');
   assert.equal(aad, 'user_id:creatergame31@gmail.com|record_id:vault_rec_01');
@@ -434,6 +442,52 @@ test('serverSecurityGuard: rate limiting, weighted daily quotas, WebSocket concu
   assert.equal(ws3.allowed, true);
   gov.releaseLiveWebSocketSlot('user_2');
 
+  // Server-side entitlement authority: regular users default to isPremium=false and cannot self-grant
+  const defaultEntitlement = gov.getUserEntitlement(userIdentity, now);
+  assert.equal(defaultEntitlement.isPremium, false);
+  assert.equal(defaultEntitlement.tier, 'STANDARD');
+  assert.equal(defaultEntitlement.dailyQuotaUnits, 50);
+
+  // Unauthenticated caller attempting to modify entitlements gets 401
+  const unauthGrant = gov.setUserEntitlement({
+    actor: null,
+    targetUid: 'user_1',
+    isPremium: true,
+    nowMs: now,
+  });
+  assert.equal(unauthGrant.allowed, false);
+  assert.equal(unauthGrant.statusCode, 401);
+
+  // Regular user attempting to self-grant isPremium=true gets 403 ENTITLEMENT_ADMIN_REQUIRED
+  const selfGrantAttempt = gov.setUserEntitlement({
+    actor: userIdentity,
+    targetUid: 'user_1',
+    isPremium: true,
+    nowMs: now,
+  });
+  assert.equal(selfGrantAttempt.allowed, false);
+  assert.equal(selfGrantAttempt.statusCode, 403);
+  assert.equal(selfGrantAttempt.errorCode, 'ENTITLEMENT_ADMIN_REQUIRED');
+
+  // Verified Admin can grant and revoke premium status on the server
+  const adminIdentity = {
+    uid: 'uid_admin_master',
+    email: 'creatergame31@gmail.com',
+    isAdmin: true,
+  };
+  const adminGrant = gov.setUserEntitlement({
+    actor: adminIdentity,
+    targetUid: 'user_3',
+    targetEmail: 'pro_creator@example.com',
+    isPremium: true,
+    nowMs: now,
+  });
+  assert.equal(adminGrant.allowed, true);
+  assert.equal(adminGrant.statusCode, 200);
+  assert.equal(adminGrant.record?.isPremium, true);
+  assert.equal(adminGrant.record?.tier, 'PREMIUM_ENTERPRISE');
+  assert.equal(adminGrant.record?.verifiedBy, 'SERVER_ENTITLEMENT_AUTHORITY');
+
   // Error sanitization never leaks raw internal error message or API keys
   const internalErr = new Error(
     'GoogleGenAIError: failed request with key AIzaSyD1234567890abcdefghijklmnop and stack trace at /app/server.ts:95'
@@ -450,4 +504,83 @@ test('serverSecurityGuard: rate limiting, weighted daily quotas, WebSocket concu
 
   assert.equal(clampPromptText('A'.repeat(5000), 'fallback', 100).length, 100);
 });
+
+test('Subscription & Billing Engine: 3-tier pricing, annual 20% savings, invoice ledger, and server entitlement/quota sync', () => {
+  assert.equal(SUBSCRIPTION_PLANS.FREE_STANDARD.monthlyPriceUsd, 0);
+  assert.equal(SUBSCRIPTION_PLANS.PRO_8K_CREATOR.monthlyPriceUsd, 19);
+  assert.equal(SUBSCRIPTION_PLANS.STUDIO_32K_ENTERPRISE.monthlyPriceUsd, 49);
+
+  // Annual pricing & ~20% savings
+  assert.equal(computePlanPeriodPriceUsd('PRO_8K_CREATOR', 'ANNUAL'), 180);
+  assert.equal(computeEffectiveMonthlyPriceUsd('PRO_8K_CREATOR', 'ANNUAL'), 15);
+  assert.equal(computeAnnualSavingsPercent('PRO_8K_CREATOR') >= 20, true);
+
+  assert.equal(computePlanPeriodPriceUsd('STUDIO_32K_ENTERPRISE', 'ANNUAL'), 468);
+  assert.equal(computeEffectiveMonthlyPriceUsd('STUDIO_32K_ENTERPRISE', 'ANNUAL'), 39);
+  assert.equal(computeAnnualSavingsPercent('STUDIO_32K_ENTERPRISE') >= 20, true);
+
+  // Pure checkout builder
+  const checkoutBuilt = buildSubscriptionCheckoutResult({
+    ownerId: 'uid_sub_1',
+    email: 'creator@omnistream.xr',
+    planId: 'PRO_8K_CREATOR',
+    billingCycle: 'ANNUAL',
+    paymentMethodLast4: '8899',
+    nowMs: 1_750_000_000_000,
+  });
+  assert.equal(checkoutBuilt.subscription.isPremium, true);
+  assert.equal(checkoutBuilt.subscription.dailyQuotaUnits, 500);
+  assert.equal(checkoutBuilt.subscription.maxStreamResolution, '8K');
+  assert.equal(checkoutBuilt.invoice.amountUsd, 180);
+  assert.equal(checkoutBuilt.invoice.status, 'PAID');
+  assert.equal(checkoutBuilt.invoice.paymentMethodSummary, 'Visa •••• 8899');
+
+  // Server Governor integration: subscribing updates entitlement & daily quota immediately
+  const gov = new GeminiApiSecurityGovernor();
+  const subscriber = {
+    uid: 'uid_sub_live',
+    email: 'studio@omnistream.xr',
+    isAdmin: false,
+  };
+
+  // Default state is FREE_STANDARD (250 units/day, isPremium: false)
+  const initial = gov.getUserSubscription(subscriber);
+  assert.equal(initial.subscription.planId, 'FREE_STANDARD');
+  assert.equal(initial.entitlement.isPremium, false);
+  assert.equal(initial.remainingDailyQuotaUnits, 250);
+
+  // Upgrade to STUDIO_32K_ENTERPRISE -> 1,000 units/day, isPremium: true
+  const upgraded = gov.checkoutUserSubscription({
+    identity: subscriber,
+    planId: 'STUDIO_32K_ENTERPRISE',
+    billingCycle: 'MONTHLY',
+    paymentMethodLast4: '4242',
+  });
+  assert.equal(upgraded.allowed, true);
+  assert.equal(upgraded.subscription?.planId, 'STUDIO_32K_ENTERPRISE');
+  assert.equal(upgraded.entitlement?.isPremium, true);
+  assert.equal(upgraded.entitlement?.dailyQuotaUnits, 1000);
+  assert.equal(upgraded.remainingDailyQuotaUnits, 1000);
+
+  // Cancel at period end preserves active premium benefits until period end
+  const cancelAtEnd = gov.cancelUserSubscription({
+    identity: subscriber,
+    immediate: false,
+  });
+  assert.equal(cancelAtEnd.allowed, true);
+  assert.equal(cancelAtEnd.subscription?.status, 'CANCELED_AT_PERIOD_END');
+  assert.equal(cancelAtEnd.subscription?.cancelAtPeriodEnd, true);
+  assert.equal(cancelAtEnd.entitlement?.isPremium, true);
+
+  // Immediate downgrade resets to FREE_STANDARD (isPremium: false, 250 units/day)
+  const immediateDowngrade = gov.cancelUserSubscription({
+    identity: subscriber,
+    immediate: true,
+  });
+  assert.equal(immediateDowngrade.allowed, true);
+  assert.equal(immediateDowngrade.subscription?.planId, 'FREE_STANDARD');
+  assert.equal(immediateDowngrade.entitlement?.isPremium, false);
+  assert.equal(immediateDowngrade.entitlement?.dailyQuotaUnits, 250);
+});
+
 

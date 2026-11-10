@@ -25,6 +25,11 @@ import {
   subscribeToContentReports,
   reviewContentReport,
   deleteContentReport,
+  verifyServerEntitlement,
+  setAdminUserPremiumEntitlement,
+  fetchMySubscriptionState,
+  checkoutSubscriptionOnServer,
+  cancelSubscriptionOnServer,
   CommentRecord,
   PlaylistRecord,
   AdminRoleRecord,
@@ -36,6 +41,14 @@ import {
   ContentReportSeverity,
   ContentReportStatus,
 } from '../services/firebase';
+import {
+  BillingCycle,
+  SubscriptionInvoiceRecord,
+  SubscriptionPlanId,
+  UserSubscriptionRecord,
+  createDefaultFreeSubscription,
+} from '../services/subscriptionEngine';
+import { SubscriptionView } from './SubscriptionView';
 import {
   fetchDriveFiles,
   fetchCalendarEvents,
@@ -158,6 +171,7 @@ const CATALOG_VIDEOS: StreamVideoItem[] = [
 
 export type ActiveTab =
   | 'LUMEN_PLATFORM'
+  | 'SUBSCRIPTION'
   | 'ADMIN_CONSOLE'
   | 'YOUTUBE_LIKES'
   | 'STUDIO_DASHBOARD'
@@ -263,7 +277,7 @@ export class AppShell {
   private searchFilter = '';
   private categoryFilter = 'ALL';
   private parentalSafeMode = false;
-  private isPremiumAdFree = true;
+  private isPremiumAdFree = false;
   private backgroundAudioMode = false;
   private offlineCachedIds = new Set<string>(['vid_spatial_8k', 'vid_alphafold_8k']);
   private comments: CommentRecord[] = [];
@@ -402,6 +416,19 @@ export class AppShell {
   private ytTotalResults = 0;
   private ytFromCache = false;
 
+  // Subscription & Billing State (Server-Governed Entitlements & Quota)
+  private currentSubscription: UserSubscriptionRecord = {
+    ...createDefaultFreeSubscription('guest_preview', undefined, false),
+    verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+  };
+  private subscriptionInvoices: SubscriptionInvoiceRecord[] = [];
+  private selectedBillingCycle: BillingCycle = 'MONTHLY';
+  private paymentMethodLast4 = '4242';
+  private remainingDailyQuotaUnits = 250;
+  private subscriptionStatusBanner =
+    'Plans & Server Entitlement Authority active. Upgrade to Pro 8K ($19/mo) or Studio 32K ($49/mo) to unlock ad-free playback and expanded Gemini Studio quota.';
+  private subscriptionSubmitting = false;
+
   constructor(studio: SpatialStudioScript) {
     this.studio = studio;
     this.root = document.getElementById('root') || document.body;
@@ -427,6 +454,21 @@ export class AppShell {
             this.render();
           })
           .catch(() => {});
+        verifyServerEntitlement()
+          .then((entitlement) => {
+            this.isPremiumAdFree = entitlement.isPremium;
+            this.render();
+          })
+          .catch(() => {});
+        fetchMySubscriptionState()
+          .then((subState) => {
+            this.currentSubscription = subState.subscription;
+            this.subscriptionInvoices = subState.invoices;
+            this.isPremiumAdFree = subState.entitlement.isPremium;
+            this.remainingDailyQuotaUnits = subState.remainingDailyQuotaUnits;
+            this.render();
+          })
+          .catch(() => {});
         void this.loadYouTubeLikesData();
         void this.syncAdminAndModerationData(user);
         this.render();
@@ -442,6 +484,12 @@ export class AppShell {
         }
         this.comments = [];
         this.currentUser = null;
+        this.isPremiumAdFree = false;
+        this.currentSubscription = {
+          ...createDefaultFreeSubscription('guest_preview', undefined, false),
+          verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+        };
+        this.remainingDailyQuotaUnits = 250;
         this.needsAuth = true;
         this.render();
       }
@@ -702,6 +750,7 @@ export class AppShell {
           <!-- Horizontal Workspace Navigation Bar (Scrollable on Mobile, Zero Overlap) -->
           <nav aria-label="Workspace navigation" class="flex items-center gap-1.5 px-3.5 md:px-6 py-1.5 overflow-x-auto border-t border-slate-200/70 dark:border-slate-800/80 bg-slate-50/80 dark:bg-[#0c101d]">
             ${this.renderDockTabButton('LUMEN_PLATFORM', 'Lumen Video')}
+            ${this.renderDockTabButton('SUBSCRIPTION', '💎 Plans & Billing')}
             ${this.renderDockTabButton('ADMIN_CONSOLE', '🛡 Admin / GM & Contact')}
             ${this.renderDockTabButton('YOUTUBE_LIKES', 'YouTube Likes')}
             ${this.renderDockTabButton('STUDIO_DASHBOARD', 'Studio Dashboard')}
@@ -773,6 +822,20 @@ export class AppShell {
   private renderActiveView(): string {
     if (this.activeTab === 'LUMEN_PLATFORM') {
       return this.lumen.render(() => this.render(), Boolean(this.currentUser));
+    }
+    if (this.activeTab === 'SUBSCRIPTION') {
+      return SubscriptionView.render({
+        currentUserEmail: this.currentUser?.email || null,
+        currentUserUid: this.currentUser?.uid || null,
+        isVerifiedMasterAdmin: isMasterAdminUser(this.currentUser),
+        subscription: this.currentSubscription,
+        invoices: this.subscriptionInvoices,
+        selectedBillingCycle: this.selectedBillingCycle,
+        paymentMethodLast4: this.paymentMethodLast4,
+        remainingDailyQuotaUnits: this.remainingDailyQuotaUnits,
+        statusBanner: this.subscriptionStatusBanner,
+        isSubmitting: this.subscriptionSubmitting,
+      });
     }
     if (this.activeTab === 'ADMIN_CONSOLE') {
       return AdminConsoleView.render({
@@ -1046,8 +1109,11 @@ export class AppShell {
               }">
                 Parental Safe Mode: ${this.parentalSafeMode ? 'ON' : 'OFF'}
               </button>
-              <button id="btn-toggle-premium" class="px-2 py-1 text-[11px] rounded border border-slate-700 bg-slate-950 text-amber-300">
-                Toggle Premium
+              <button id="btn-toggle-premium" class="px-2 py-1 text-[11px] rounded border border-slate-700 bg-slate-950 text-amber-300 cursor-pointer" title="Premium status is verified by server-side entitlement authority (/api/entitlements/me)">
+                ${isMasterAdminUser(this.currentUser) ? 'Admin Entitlement Override' : 'Verify Server Entitlement'}
+              </button>
+              <button id="btn-open-subscription-hub" class="px-2 py-1 text-[11px] font-semibold rounded border border-indigo-500/40 bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 cursor-pointer">
+                💎 Manage Subscription
               </button>
             </div>
           </div>
@@ -2221,6 +2287,109 @@ export class AppShell {
       });
     }
 
+    if (this.activeTab === 'SUBSCRIPTION') {
+      SubscriptionView.bindEvents(
+        {
+          currentUserEmail: this.currentUser?.email || null,
+          currentUserUid: this.currentUser?.uid || null,
+          isVerifiedMasterAdmin: isMasterAdminUser(this.currentUser),
+          subscription: this.currentSubscription,
+          invoices: this.subscriptionInvoices,
+          selectedBillingCycle: this.selectedBillingCycle,
+          paymentMethodLast4: this.paymentMethodLast4,
+          remainingDailyQuotaUnits: this.remainingDailyQuotaUnits,
+          statusBanner: this.subscriptionStatusBanner,
+          isSubmitting: this.subscriptionSubmitting,
+        },
+        {
+          onSelectBillingCycle: (cycle) => {
+            this.selectedBillingCycle = cycle;
+            this.render();
+          },
+          onChangePaymentLast4: (last4) => {
+            const digits = last4.replace(/\D/g, '').slice(-4);
+            this.paymentMethodLast4 = digits.length === 4 ? digits : '4242';
+            this.render();
+          },
+          onCheckoutPlan: async (planId: SubscriptionPlanId, cycle: BillingCycle) => {
+            this.subscriptionSubmitting = true;
+            this.render();
+            try {
+              const res = await checkoutSubscriptionOnServer({
+                planId,
+                billingCycle: cycle,
+                paymentMethodLast4: this.paymentMethodLast4,
+              });
+              this.currentSubscription = res.subscription;
+              if (this.currentUser) {
+                this.subscriptionInvoices = res.invoices;
+              } else {
+                this.subscriptionInvoices = [
+                  res.invoice,
+                  ...this.subscriptionInvoices,
+                ].slice(0, 20);
+              }
+              this.isPremiumAdFree = res.entitlement.isPremium;
+              this.remainingDailyQuotaUnits = res.remainingDailyQuotaUnits;
+              this.subscriptionStatusBanner = res.message;
+              showLumenToast(res.message);
+            } catch (err) {
+              const msg =
+                err instanceof Error
+                  ? err.message
+                  : 'Subscription checkout failed.';
+              this.subscriptionStatusBanner = msg;
+              showLumenToast(msg);
+            } finally {
+              this.subscriptionSubmitting = false;
+              this.render();
+            }
+          },
+          onCancelSubscription: async (immediate: boolean) => {
+            this.subscriptionSubmitting = true;
+            this.render();
+            try {
+              const res = await cancelSubscriptionOnServer(immediate);
+              this.currentSubscription = res.subscription;
+              this.isPremiumAdFree = res.entitlement.isPremium;
+              this.remainingDailyQuotaUnits = res.remainingDailyQuotaUnits;
+              this.subscriptionStatusBanner = res.message;
+              showLumenToast(res.message);
+            } catch (err) {
+              const msg =
+                err instanceof Error
+                  ? err.message
+                  : 'Failed to cancel subscription.';
+              this.subscriptionStatusBanner = msg;
+              showLumenToast(msg);
+            } finally {
+              this.subscriptionSubmitting = false;
+              this.render();
+            }
+          },
+          onDownloadInvoiceJson: (invoice: SubscriptionInvoiceRecord) => {
+            const blob = new Blob([JSON.stringify(invoice, null, 2)], {
+              type: 'application/json;charset=utf-8;',
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `omnistream-invoice-${invoice.invoiceId}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showLumenToast(`Downloaded receipt ${invoice.invoiceId}`);
+          },
+        }
+      );
+    }
+
+    document.getElementById('btn-open-subscription-hub')?.addEventListener('click', () => {
+      this.activeTab = 'SUBSCRIPTION';
+      this.render();
+    });
+
     document.getElementById('btn-mute-synth')?.addEventListener('click', () => {
       studioSynth.muted = !studioSynth.muted;
       this.render();
@@ -2295,8 +2464,27 @@ export class AppShell {
       this.render();
     });
 
-    document.getElementById('btn-toggle-premium')?.addEventListener('click', () => {
-      this.isPremiumAdFree = !this.isPremiumAdFree;
+    document.getElementById('btn-toggle-premium')?.addEventListener('click', async () => {
+      if (this.currentUser && isMasterAdminUser(this.currentUser)) {
+        try {
+          const updated = await setAdminUserPremiumEntitlement(
+            this.currentUser.uid,
+            !this.isPremiumAdFree
+          );
+          this.isPremiumAdFree = updated.isPremium;
+          showLumenToast(
+            `Server Admin Entitlement Updated: ${updated.tier} (${updated.dailyQuotaUnits} quota units/day)`
+          );
+        } catch (err) {
+          showLumenToast(err instanceof Error ? err.message : 'Server entitlement check failed');
+        }
+      } else {
+        const verified = await verifyServerEntitlement();
+        this.isPremiumAdFree = verified.isPremium;
+        showLumenToast(
+          `Server Entitlement Verified: ${verified.tier} (Clients cannot self-grant Premium status)`
+        );
+      }
       this.render();
     });
 

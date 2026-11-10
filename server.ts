@@ -21,6 +21,7 @@ import {
   sanitizeServerError,
   verifyFirebaseIdToken,
 } from './src/services/serverSecurityGuard';
+import { SUBSCRIPTION_PLANS } from './src/services/subscriptionEngine';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -128,6 +129,168 @@ async function startServer() {
       });
     }
   };
+
+  // 0a. Trusted Server-Side Entitlement Verification (`GET /api/entitlements/me`)
+  // Enforces premium status through server-side verification rather than client-controlled flags.
+  app.get('/api/entitlements/me', async (req, res) => {
+    try {
+      const token = extractBearerOrQueryToken(req.headers.authorization, req.originalUrl);
+      const identity = token
+        ? await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID, PRIMARY_ADMIN_EMAIL)
+        : null;
+
+      if (!identity) {
+        res.status(401).json({
+          error: 'Authentication required to verify account entitlements.',
+          code: 'UNAUTHENTICATED',
+        });
+        return;
+      }
+
+      const entitlement = securityGovernor.getUserEntitlement(identity);
+      res.json(entitlement);
+    } catch (error: unknown) {
+      logSanitizedServerError('ENTITLEMENT_VERIFY_ERROR', error);
+      res.status(500).json(sanitizeServerError(error, 'INTERNAL_ERROR'));
+    }
+  });
+
+  // 0b. Trusted Server-Side Entitlement Grant/Revoke (`POST /api/entitlements/grant`)
+  // Strictly restricted to verified server administrators; blocks regular users from self-granting premium.
+  app.post('/api/entitlements/grant', jsonTextParser, async (req, res) => {
+    try {
+      const token = extractBearerOrQueryToken(req.headers.authorization, req.originalUrl);
+      const identity = token
+        ? await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID, PRIMARY_ADMIN_EMAIL)
+        : null;
+
+      const { targetUid, targetEmail, isPremium } = req.body || {};
+      const decision = securityGovernor.setUserEntitlement({
+        actor: identity,
+        targetUid: typeof targetUid === 'string' && targetUid.trim() ? targetUid : identity?.uid || '',
+        targetEmail: typeof targetEmail === 'string' ? targetEmail : identity?.email,
+        isPremium: Boolean(isPremium),
+      });
+
+      if (!decision.allowed) {
+        res.status(decision.statusCode).json({
+          error: decision.publicMessage,
+          code: decision.errorCode,
+        });
+        return;
+      }
+
+      res.json(decision.record);
+    } catch (error: unknown) {
+      logSanitizedServerError('ENTITLEMENT_GRANT_ERROR', error);
+      res.status(500).json(sanitizeServerError(error, 'INTERNAL_ERROR'));
+    }
+  });
+
+  // 0c. Public Subscription Plans Catalog (`GET /api/subscriptions/plans`)
+  app.get('/api/subscriptions/plans', (_req, res) => {
+    res.json({
+      plans: Object.values(SUBSCRIPTION_PLANS),
+    });
+  });
+
+  // 0d. Authenticated User Subscription & Billing State (`GET /api/subscriptions/me`)
+  app.get('/api/subscriptions/me', async (req, res) => {
+    try {
+      const token = extractBearerOrQueryToken(req.headers.authorization, req.originalUrl);
+      const identity = token
+        ? await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID, PRIMARY_ADMIN_EMAIL)
+        : null;
+
+      if (!identity) {
+        res.status(401).json({
+          error: 'Authentication required to fetch subscription state.',
+          code: 'UNAUTHENTICATED',
+        });
+        return;
+      }
+
+      const subState = securityGovernor.getUserSubscription(identity);
+      res.json(subState);
+    } catch (error: unknown) {
+      logSanitizedServerError('SUBSCRIPTION_ME_ERROR', error);
+      res.status(500).json(sanitizeServerError(error, 'INTERNAL_ERROR'));
+    }
+  });
+
+  // 0e. Trusted Server-Side Subscription Checkout (`POST /api/subscriptions/checkout`)
+  app.post('/api/subscriptions/checkout', jsonTextParser, async (req, res) => {
+    try {
+      const token = extractBearerOrQueryToken(req.headers.authorization, req.originalUrl);
+      const identity = token
+        ? await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID, PRIMARY_ADMIN_EMAIL)
+        : null;
+
+      const { planId, billingCycle, paymentMethodLast4 } = req.body || {};
+      const decision = securityGovernor.checkoutUserSubscription({
+        identity,
+        planId,
+        billingCycle,
+        paymentMethodLast4:
+          typeof paymentMethodLast4 === 'string' ? paymentMethodLast4 : undefined,
+      });
+
+      if (!decision.allowed) {
+        res.status(decision.statusCode).json({
+          error: decision.publicMessage,
+          code: decision.errorCode,
+        });
+        return;
+      }
+
+      res.json({
+        message: decision.publicMessage,
+        subscription: decision.subscription,
+        invoice: decision.invoice,
+        invoices: decision.invoices,
+        entitlement: decision.entitlement,
+        remainingDailyQuotaUnits: decision.remainingDailyQuotaUnits,
+      });
+    } catch (error: unknown) {
+      logSanitizedServerError('SUBSCRIPTION_CHECKOUT_ERROR', error);
+      res.status(500).json(sanitizeServerError(error, 'INTERNAL_ERROR'));
+    }
+  });
+
+  // 0f. Trusted Server-Side Subscription Cancellation (`POST /api/subscriptions/cancel`)
+  app.post('/api/subscriptions/cancel', jsonTextParser, async (req, res) => {
+    try {
+      const token = extractBearerOrQueryToken(req.headers.authorization, req.originalUrl);
+      const identity = token
+        ? await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID, PRIMARY_ADMIN_EMAIL)
+        : null;
+
+      const { immediate } = req.body || {};
+      const decision = securityGovernor.cancelUserSubscription({
+        identity,
+        immediate: Boolean(immediate),
+      });
+
+      if (!decision.allowed) {
+        res.status(decision.statusCode).json({
+          error: decision.publicMessage,
+          code: decision.errorCode,
+        });
+        return;
+      }
+
+      res.json({
+        message: decision.publicMessage,
+        subscription: decision.subscription,
+        invoices: decision.invoices,
+        entitlement: decision.entitlement,
+        remainingDailyQuotaUnits: decision.remainingDailyQuotaUnits,
+      });
+    } catch (error: unknown) {
+      logSanitizedServerError('SUBSCRIPTION_CANCEL_ERROR', error);
+      res.status(500).json(sanitizeServerError(error, 'INTERNAL_ERROR'));
+    }
+  });
 
   // 1. Multi-turn Chat (gemini-4-argon, gemini-3.8-flash, gemini-3.1-flash-lite)
   app.post(

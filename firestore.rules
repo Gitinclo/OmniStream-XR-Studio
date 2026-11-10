@@ -118,7 +118,7 @@ service cloud.firestore {
           'ownerId', 'displayName', 'isPremium', 'parentalControlMode',
           'lastWatchedVideoId', 'lastWatchedProgressSec', 'createdAt', 'updatedAt'
         ])
-        && data.ownerId is string && isValidId(data.ownerId) && data.ownerId == request.auth.uid
+        && data.ownerId is string && isValidId(data.ownerId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.isPremium is bool
         && data.parentalControlMode is bool
@@ -201,6 +201,36 @@ service cloud.firestore {
         && data.status is string && data.status.size() >= 4 && data.status.size() <= 20
         && (data.status == 'OPEN' || data.status == 'IN_REVIEW' || data.status == 'ACTIONED' || data.status == 'DISMISSED')
         && data.resolutionNotes is string && data.resolutionNotes.size() <= 1000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: Subscription
+    function isValidSubscription(data) {
+      return data.keys().hasAll([
+          'ownerId', 'planId', 'billingCycle', 'status', 'isPremium',
+          'maxStreamResolution', 'dailyQuotaUnits', 'priceUsdPerPeriod',
+          'paymentMethodLast4', 'cancelAtPeriodEnd', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'planId', 'billingCycle', 'status', 'isPremium',
+          'maxStreamResolution', 'dailyQuotaUnits', 'priceUsdPerPeriod',
+          'paymentMethodLast4', 'cancelAtPeriodEnd', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.planId is string && data.planId.size() >= 4 && data.planId.size() <= 32
+        && (data.planId == 'FREE_STANDARD' || data.planId == 'PRO_8K_CREATOR' || data.planId == 'STUDIO_32K_ENTERPRISE')
+        && data.billingCycle is string && data.billingCycle.size() >= 6 && data.billingCycle.size() <= 10
+        && (data.billingCycle == 'MONTHLY' || data.billingCycle == 'ANNUAL')
+        && data.status is string && data.status.size() >= 6 && data.status.size() <= 24
+        && (data.status == 'ACTIVE' || data.status == 'CANCELED_AT_PERIOD_END' || data.status == 'PAST_DUE')
+        && data.isPremium is bool
+        && data.maxStreamResolution is string && data.maxStreamResolution.size() >= 2 && data.maxStreamResolution.size() <= 4
+        && (data.maxStreamResolution == '4K' || data.maxStreamResolution == '8K' || data.maxStreamResolution == '32K')
+        && data.dailyQuotaUnits is number && data.dailyQuotaUnits >= 250 && data.dailyQuotaUnits <= 10000
+        && data.priceUsdPerPeriod is number && data.priceUsdPerPeriod >= 0 && data.priceUsdPerPeriod <= 10000
+        && data.paymentMethodLast4 is string && data.paymentMethodLast4.size() == 4
+        && data.cancelAtPeriodEnd is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -289,30 +319,41 @@ service cloud.firestore {
         && existing().ownerId == request.auth.uid;
     }
 
-    // User Profiles Collection (Isolated to Owner)
+    // User Profiles Collection (Isolated to Owner; isPremium Entitlement Governed by Admin/Server)
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && existing().ownerId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(userId) && ((userId == request.auth.uid && existing().ownerId == request.auth.uid) || isAdmin());
       allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
       allow create: if isVerifiedUser()
         && isValidId(userId)
         && userId == request.auth.uid
         && isValidUserProfile(incoming())
+        && incoming().ownerId == request.auth.uid
+        && (incoming().isPremium == false || isAdmin())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isVerifiedUser()
         && isValidId(userId)
-        && userId == request.auth.uid
         && isValidUserProfile(incoming())
-        && existing().ownerId == request.auth.uid
         && incoming().ownerId == existing().ownerId
+        && incoming().ownerId == userId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action 1: Update profile & preferences
-          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'isPremium', 'parentalControlMode', 'updatedAt'])
+          // Action 1: Owner updating profile display name & parental controls (cannot modify isPremium)
+          (userId == request.auth.uid
+            && existing().ownerId == request.auth.uid
+            && incoming().isPremium == existing().isPremium
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'parentalControlMode', 'updatedAt']))
           ||
-          // Action 2: Sync cross-device playback progress
-          incoming().diff(existing()).affectedKeys().hasOnly(['lastWatchedVideoId', 'lastWatchedProgressSec', 'updatedAt'])
+          // Action 2: Owner syncing cross-device playback progress (cannot modify isPremium)
+          (userId == request.auth.uid
+            && existing().ownerId == request.auth.uid
+            && incoming().isPremium == existing().isPremium
+            && incoming().diff(existing()).affectedKeys().hasOnly(['lastWatchedVideoId', 'lastWatchedProgressSec', 'updatedAt']))
+          ||
+          // Action 3: Trusted Admin / Server authority granting or revoking isPremium entitlement
+          (isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['isPremium', 'updatedAt']))
         );
       allow delete: if isVerifiedUser()
         && isValidId(userId)
@@ -443,6 +484,57 @@ service cloud.firestore {
       allow delete: if isVerifiedUser()
         && isValidId(reportId)
         && (existing().reporterId == request.auth.uid || isAdmin());
+    }
+
+    // Subscriptions & Billing Collection (/subscriptions/{subscriptionId})
+    // Isolated to subscriber; paid tier activation & quota allocation are governed by Admin/Server authority
+    match /subscriptions/{subscriptionId} {
+      allow get: if isSignedIn() && isValidId(subscriptionId) && ((subscriptionId == request.auth.uid && existing().ownerId == request.auth.uid) || isAdmin());
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isVerifiedUser()
+        && isValidId(subscriptionId)
+        && subscriptionId == request.auth.uid
+        && isValidSubscription(incoming())
+        && incoming().ownerId == request.auth.uid
+        && (
+          (incoming().planId == 'FREE_STANDARD'
+            && incoming().isPremium == false
+            && incoming().dailyQuotaUnits == 250
+            && incoming().maxStreamResolution == '4K'
+            && incoming().priceUsdPerPeriod == 0)
+          || isAdmin()
+        )
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(subscriptionId)
+        && isValidSubscription(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().ownerId == subscriptionId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Subscriber updating cancellation preference or payment method (cannot self-upgrade tier/quota/isPremium)
+          (subscriptionId == request.auth.uid
+            && existing().ownerId == request.auth.uid
+            && incoming().planId == existing().planId
+            && incoming().isPremium == existing().isPremium
+            && incoming().dailyQuotaUnits == existing().dailyQuotaUnits
+            && incoming().maxStreamResolution == existing().maxStreamResolution
+            && incoming().priceUsdPerPeriod == existing().priceUsdPerPeriod
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancelAtPeriodEnd', 'paymentMethodLast4', 'updatedAt']))
+          ||
+          // Action 2: Trusted Admin / Server authority provisioning paid tiers, billing cycles, and quota allowances
+          (isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'planId', 'billingCycle', 'status', 'isPremium', 'maxStreamResolution',
+              'dailyQuotaUnits', 'priceUsdPerPeriod', 'paymentMethodLast4',
+              'cancelAtPeriodEnd', 'updatedAt'
+            ]))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(subscriptionId)
+        && ((subscriptionId == request.auth.uid && existing().ownerId == request.auth.uid) || isAdmin());
     }
   }
 }

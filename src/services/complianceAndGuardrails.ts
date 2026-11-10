@@ -310,11 +310,11 @@ npm run build && npm start
 \`\`\`
 
 ## 3. Seven Core Architectural Pillars
-1. **Server-Side Gemini API Security & Rate-Limiting Governor (\`/src/services/serverSecurityGuard.ts\` & \`/server.ts\`)**:
-   - Cryptographic RS256 Firebase ID Token verification on all 10 \`/api/gemini/*\` routes and \`/live\` WebSocket upgrades, per-IP and per-user sliding-window rate limits, weighted daily quotas, and sanitized \`{ error, code, requestId }\` responses.
-2. **Firebase Emulator-Backed Firestore Security Rules, Dirty Dozen Suite & 4-Tier RBAC (\`/firestore.rules\`, \`/src/services/firestoreRulesHarness.ts\`, \`/firestore.rules.test.ts\`)**:
+1. **Server-Side Gemini API Security, Entitlement & Rate-Limiting Governor (\`/src/services/serverSecurityGuard.ts\` & \`/server.ts\`)**:
+   - Cryptographic RS256 Firebase ID Token verification on all 10 \`/api/gemini/*\` routes, \`/api/entitlements/*\` routes, and \`/live\` WebSocket upgrades, server-authoritative \`isPremium\` entitlement verification (\`GET /api/entitlements/me\`, \`POST /api/entitlements/grant\`), per-IP and per-user sliding-window rate limits, weighted daily quotas, and sanitized \`{ error, code, requestId }\` responses.
+2. **Firebase Emulator-Backed Firestore Security Rules, Entitlement Isolation & 4-Tier RBAC (\`/firestore.rules\`, \`/src/services/firestoreRulesHarness.ts\`, \`/firestore.rules.test.ts\`)**:
    - Loads \`/firestore.rules\` into the official \`cloud-firestore-emulator\` via \`@firebase/rules-unit-testing\`'s \`initializeTestEnvironment()\` and evaluates live \`firebase/firestore\` CRUD requests with \`assertSucceeds()\` and \`assertFails()\`.
-   - Enforces a role-verified 4-tier RBAC hierarchy (\`SUPER_ADMIN\` > \`ADMIN\` > \`GM\` > \`MODERATOR\`) via \`hasStaffRole(allowedRoles)\`.
+   - Enforces a role-verified 4-tier RBAC hierarchy (\`SUPER_ADMIN\` > \`ADMIN\` > \`GM\` > \`MODERATOR\`) via \`hasStaffRole(allowedRoles)\`, and blocks users from self-granting \`isPremium: true\` on \`/users/{userId}\` create or update.
 3. **AES-256-GCM Authenticated Encryption Engine (\`/src/services/cryptoAes256.ts\`)**:
    - Native WebCrypto \`AES-256-GCM\` with 256-bit keys, 12-byte CSPRNG IVs, 128-bit auth tags, \`AAD\` binding (\`user_id:<uid>|record_id:<id>\`), and 64 KB chunked streaming.
 4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB RAM) Hardware Telemetry Governor & Live HUD (\`/src/services/hardwareGovernor.ts\` & \`/src/ui/HardwareTelemetryHud.ts\`)**:
@@ -333,11 +333,11 @@ npm run build && npm start
     frameworksCovered: [
       'NIST SP 800-38D (AES-GCM)',
       'RS256 Firebase JWT Verification',
-      '4-Tier RBAC & Firebase Emulator Tests',
+      '4-Tier RBAC & Entitlement Guard',
       'OWASP Top 10 & Error Sanitization',
     ],
     summary:
-      'Defines the AES-256-GCM cryptographic envelope, AAD binding, RS256 Firebase ID token authentication on /api/gemini/* and /live, 4-tier Firestore RBAC (SUPER_ADMIN > ADMIN > GM > MODERATOR), and official Firebase Firestore Emulator verification.',
+      'Defines the AES-256-GCM cryptographic envelope, AAD binding, RS256 Firebase ID token authentication on /api/gemini/* and /live, server-enforced isPremium entitlements, 4-tier Firestore RBAC (SUPER_ADMIN > ADMIN > GM > MODERATOR), and official Firebase Firestore Emulator verification.',
     markdownContent: `# Security Policy & Cryptographic Specification (SECURITY.md)
 
 ## 1. Authenticated Encryption Standard (NIST SP 800-38D)
@@ -348,13 +348,15 @@ npm run build && npm start
 - **Packed Wire Layout**: \`[12-byte IV | 16-byte AuthTag | Ciphertext]\` encoded in URL-safe Base64 (\`-\` and \`_\`, no padding \`=\`).
 - **Associated Authenticated Data (AAD)**: Every ciphertext is cryptographically bound to \`user_id:<uid>|record_id:<id>\`. Modifying the AAD or transplanting ciphertext to another record triggers an immediate \`AEADBadTagException\`.
 
-## 2. Server-Side Gemini API Authentication, Rate Limiting & Quota Protection (\`/src/services/serverSecurityGuard.ts\`)
-- **Mandatory Firebase ID Token Verification**: All \`/api/gemini/*\` endpoints and the \`/live\` WebSocket upgrade verify \`RS256\` Firebase ID tokens against Google's \`securetoken@system.gserviceaccount.com\` X.509 certificates (\`401 Unauthorized\` when missing or invalid).
-- **Sliding-Window Rate Limiting & Weighted Quotas**: Per-IP (\`30 req/min\`) and per-user/per-endpoint rate limits (\`2 req/min\` video, \`4 req/min\` image/music, \`6–15 req/min\` speech/vision/chat) plus weighted daily quotas (\`250 units/day\` user, \`1,000 units/day\` admin, \`5,000 units/day\` global) and \`/live\` WebSocket concurrency caps (\`1\` session/user).
+## 2. Server-Side Gemini API Authentication, Entitlements, Rate Limiting & Quota Protection (\`/src/services/serverSecurityGuard.ts\`)
+- **Mandatory Firebase ID Token Verification**: All \`/api/gemini/*\` endpoints, \`/api/entitlements/*\` routes, and the \`/live\` WebSocket upgrade verify \`RS256\` Firebase ID tokens against Google's \`securetoken@system.gserviceaccount.com\` X.509 certificates (\`401 Unauthorized\` when missing or invalid).
+- **Server-Enforced Premium Entitlements (\`/api/entitlements/me\` & \`/api/entitlements/grant\`)**: Clients initialize \`isPremium: false\` and cannot self-grant premium status in Firestore or on the server (\`403 ENTITLEMENT_ADMIN_REQUIRED\`).
+- **Sliding-Window Rate Limiting & Weighted Quotas**: Per-IP (\`30 req/min\`) and per-user/per-endpoint rate limits (\`2 req/min\` video, \`4 req/min\` image/music, \`6–15 req/min\` speech/vision/chat) plus weighted daily quotas (\`250 units/day\` standard, \`500 units/day\` server-verified premium, \`1,000 units/day\` admin, \`5,000 units/day\` global) and \`/live\` WebSocket concurrency caps (\`1\` session/user).
 - **Error Sanitization & Log Redaction**: Raw \`error.message\` and stack traces are never returned to clients; responses use safe \`{ error, code, requestId }\` envelopes and server logs redact keys/tokens.
 
 ## 3. 4-Tier Role-Based Access Control & Firebase Emulator Verification (\`/firestore.rules\` & \`/firestore.rules.test.ts\`)
 - **Role-Verified Staff Lookup (\`hasStaffRole(allowedRoles)\`)**: Validates \`exists(/databases/$(database)/documents/admins/$(request.auth.uid))\`, \`get(...).data.targetUid == request.auth.uid\`, and \`get(...).data.role in allowedRoles\` across 4 least-privilege tiers (\`isSuperAdmin()\`, \`isAdmin()\`, \`isGM()\`, \`isModerator()\`).
+- **Entitlement Isolation on \`/users/{userId}\`**: Enforces \`incoming().isPremium == false || isAdmin()\` on profile creation and prohibits non-admin owners from modifying \`isPremium\` on profile updates.
 - **Official Firebase Firestore Emulator Evaluation**: Loads \`/firestore.rules\` into the official \`cloud-firestore-emulator\` via \`@firebase/rules-unit-testing\`'s \`initializeTestEnvironment()\` and verifies real \`firebase/firestore\` CRUD operations across all 12 Dirty Dozen payloads, all 7 collections, and all 4 staff tiers using \`assertSucceeds()\` and \`assertFails()\`.
 
 ## 4. OAuth 2.0 & Secret Hygiene

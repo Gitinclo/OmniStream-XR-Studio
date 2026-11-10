@@ -108,7 +108,7 @@ function createValidUserProfilePayload(ownerId: string, overrides: Record<string
   return {
     ownerId,
     displayName: 'Alice Spatial',
-    isPremium: true,
+    isPremium: false,
     parentalControlMode: false,
     lastWatchedVideoId: 'vid_1',
     lastWatchedProgressSec: 120,
@@ -176,6 +176,27 @@ function createValidContentReportPayload(
   };
 }
 
+function createValidSubscriptionPayload(
+  ownerId: string,
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    ownerId,
+    planId: 'FREE_STANDARD',
+    billingCycle: 'MONTHLY',
+    status: 'ACTIVE',
+    isPremium: false,
+    maxStreamResolution: '4K',
+    dailyQuotaUnits: 250,
+    priceUsdPerPeriod: 0,
+    paymentMethodLast4: 'NONE',
+    cancelAtPeriodEnd: false,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...overrides,
+  };
+}
+
 test('Firebase Firestore Emulator Verification: Rules are compiled and served by the official Firebase Emulator', async () => {
   const { host, port } = await ensureFirestoreEmulator();
   const testEnv = await initializeRulesTestEnvironment({
@@ -214,10 +235,18 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
       await setDoc(doc(db, 'users/uid_bob'), createValidUserProfilePayload('uid_bob'));
       await setDoc(
         doc(db, 'moderation_tickets/tkt_resolved'),
-        createValidModerationTicketPayload('uid_alice', {
+        {
+          ownerId: 'uid_alice',
+          senderName: 'Alice Creator',
+          recipientEmail: PRIMARY_ADMIN_EMAIL,
+          category: 'ADMIN',
+          subject: 'Requesting 32K stream verification badge',
+          message: 'Hello Admin, please review our studio channel verification request.',
           status: 'RESOLVED',
           adminReply: 'Closed by Admin.',
-        })
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }
       );
       await setDoc(
         doc(db, 'content_reports/rep_open'),
@@ -235,6 +264,13 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
     const aliceDb = testEnv
       .authenticatedContext('uid_alice', {
         email: 'alice@example.com',
+        email_verified: true,
+      })
+      .firestore();
+
+    const bobDb = testEnv
+      .authenticatedContext('uid_bob', {
+        email: 'bob@example.com',
         email_verified: true,
       })
       .firestore();
@@ -263,12 +299,26 @@ test('Dirty Dozen #1–#12: All 12 adversarial payloads in security_spec.md retu
     );
     await assertFails(deleteDoc(doc(spoofedAdminDb, 'videos/vid_1')));
 
-    // 3. Dirty Dozen #3: Self-Assigned Admin Privilege by regular verified user
+    // 3. Dirty Dozen #3: Self-Assigned Admin Privilege & Self-Granted `isPremium` Entitlement
     await assertFails(
       setDoc(
         doc(aliceDb, 'admins/uid_alice'),
         createValidAdminRolePayload('uid_alice', 'uid_alice', { role: 'SUPER_ADMIN' })
       )
+    );
+    // 3b. Regular user cannot create their own `/users/{uid}` profile with `isPremium: true`
+    await assertFails(
+      setDoc(
+        doc(aliceDb, 'users/uid_alice'),
+        createValidUserProfilePayload('uid_alice', { isPremium: true })
+      )
+    );
+    // 3c. Regular user cannot self-update `isPremium: true` on their existing `/users/{uid}` profile
+    await assertFails(
+      updateDoc(doc(bobDb, 'users/uid_bob'), {
+        isPremium: true,
+        updatedAt: serverTimestamp(),
+      })
     );
 
     // 4. Dirty Dozen #4: Orphaned Comment Creation (parent `/videos/non_existent_vid` does not exist)
@@ -495,10 +545,25 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       })
     );
 
+    // Alice cannot create her profile with `isPremium: true`, but succeeds with `isPremium: false`
+    await assertFails(
+      setDoc(
+        doc(aliceDb, 'users/uid_alice'),
+        createValidUserProfilePayload('uid_alice', { isPremium: true })
+      )
+    );
     await assertSucceeds(
       setDoc(doc(aliceDb, 'users/uid_alice'), createValidUserProfilePayload('uid_alice'))
     );
     await assertSucceeds(getDoc(doc(aliceDb, 'users/uid_alice')));
+    // Alice can update her own `displayName`, `parentalControlMode`, and playback progress while `isPremium` stays `false`
+    await assertSucceeds(
+      updateDoc(doc(aliceDb, 'users/uid_alice'), {
+        displayName: 'Alice Spatial Studio',
+        parentalControlMode: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
     await assertSucceeds(
       updateDoc(doc(aliceDb, 'users/uid_alice'), {
         lastWatchedVideoId: 'vid_100',
@@ -506,8 +571,22 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
         updatedAt: serverTimestamp(),
       })
     );
+    // Alice CANNOT grant herself `isPremium: true` via updateDoc
+    await assertFails(
+      updateDoc(doc(aliceDb, 'users/uid_alice'), {
+        isPremium: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      updateDoc(doc(aliceDb, 'users/uid_alice'), {
+        displayName: 'Alice Trying To Sneak Premium',
+        isPremium: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
 
-    // 4. Admin Role Registry (`/admins/{adminId}`) & Delegated Moderator Authority
+    // 4. Admin Role Registry (`/admins/{adminId}`), Entitlement Governance & Delegated Moderator Authority
     // Before being added to `/admins/uid_mod_staff`, `delegatedModDb` cannot moderate comments
     await assertFails(deleteDoc(doc(delegatedModDb, 'videos/vid_100/comments/cmt_1')));
 
@@ -519,6 +598,21 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
       )
     );
     await assertSucceeds(getDoc(doc(delegatedModDb, 'admins/uid_mod_staff')));
+
+    // A `MODERATOR` cannot grant `isPremium` entitlement to a user (`isAdmin()` required),
+    // whereas `primaryAdminDb` (`SUPER_ADMIN` / `isAdmin()`) CAN grant and revoke `isPremium` on `/users/uid_alice`!
+    await assertFails(
+      updateDoc(doc(delegatedModDb, 'users/uid_alice'), {
+        isPremium: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertSucceeds(
+      updateDoc(doc(primaryAdminDb, 'users/uid_alice'), {
+        isPremium: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
 
     // Now `delegatedModDb` is recognized by `isModerator()` via `hasStaffRole` and can delete comments!
     await assertSucceeds(deleteDoc(doc(delegatedModDb, 'videos/vid_100/comments/cmt_1')));
@@ -600,6 +694,66 @@ test('Behavioral CRUD & RBAC: Allowed and denied operations across all 7 collect
         status: 'ACTIONED',
         severity: 'CRITICAL',
         resolutionNotes: 'Reviewed in Admin Dashboard and restricted stream.',
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // 7. Subscriptions (`/subscriptions/{subscriptionId}`)
+    // Regular subscriber cannot create a paid tier (`PRO_8K_CREATOR` or `STUDIO_32K_ENTERPRISE`) or `isPremium: true` directly in Firestore
+    await assertFails(
+      setDoc(
+        doc(aliceDb, 'subscriptions/uid_alice'),
+        createValidSubscriptionPayload('uid_alice', {
+          planId: 'PRO_8K_CREATOR',
+          isPremium: true,
+          dailyQuotaUnits: 500,
+          maxStreamResolution: '8K',
+          priceUsdPerPeriod: 19,
+          paymentMethodLast4: '4242',
+        })
+      )
+    );
+    // Regular subscriber CAN initialize `FREE_STANDARD` (`isPremium: false`, `dailyQuotaUnits: 250`)
+    await assertSucceeds(
+      setDoc(
+        doc(aliceDb, 'subscriptions/uid_alice'),
+        createValidSubscriptionPayload('uid_alice')
+      )
+    );
+    // Subscriber can read their own subscription; Bob (cross-user) is DENIED
+    await assertSucceeds(getDoc(doc(aliceDb, 'subscriptions/uid_alice')));
+    await assertFails(getDoc(doc(bobDb, 'subscriptions/uid_alice')));
+
+    // Subscriber can update cancellation preference / payment method last4 without changing planId/isPremium/quota
+    await assertSucceeds(
+      updateDoc(doc(aliceDb, 'subscriptions/uid_alice'), {
+        status: 'CANCELED_AT_PERIOD_END',
+        cancelAtPeriodEnd: true,
+        paymentMethodLast4: '4242',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    // Subscriber CANNOT self-upgrade `planId`, `isPremium`, or `dailyQuotaUnits` on update
+    await assertFails(
+      updateDoc(doc(aliceDb, 'subscriptions/uid_alice'), {
+        planId: 'STUDIO_32K_ENTERPRISE',
+        isPremium: true,
+        dailyQuotaUnits: 1000,
+        updatedAt: serverTimestamp(),
+      })
+    );
+    // Trusted Admin (`isAdmin()`) CAN provision paid tier (`STUDIO_32K_ENTERPRISE`, `isPremium: true`, `dailyQuotaUnits: 1000`)
+    await assertSucceeds(
+      updateDoc(doc(primaryAdminDb, 'subscriptions/uid_alice'), {
+        planId: 'STUDIO_32K_ENTERPRISE',
+        billingCycle: 'ANNUAL',
+        status: 'ACTIVE',
+        isPremium: true,
+        maxStreamResolution: '32K',
+        dailyQuotaUnits: 1000,
+        priceUsdPerPeriod: 468,
+        paymentMethodLast4: '4242',
+        cancelAtPeriodEnd: false,
         updatedAt: serverTimestamp(),
       })
     );

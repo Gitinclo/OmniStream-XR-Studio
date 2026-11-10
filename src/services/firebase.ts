@@ -23,6 +23,14 @@ import {
   Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  BillingCycle,
+  SubscriptionInvoiceRecord,
+  SubscriptionPlanId,
+  UserSubscriptionRecord,
+  buildSubscriptionCheckoutResult,
+  createDefaultFreeSubscription,
+} from './subscriptionEngine';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -87,6 +95,7 @@ export const googleSignIn = async (): Promise<{
     }
     cachedAccessToken = credential.accessToken;
     await ensureUserProfile(result.user);
+    await ensureDefaultSubscription(result.user);
     await ensureAdminRoleForMasterUser(result.user);
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: unknown) {
@@ -208,16 +217,41 @@ export interface PlaylistRecord {
   videoIds: string;
 }
 
+export interface UserProfileRecord {
+  ownerId: string;
+  displayName: string;
+  isPremium: boolean;
+  parentalControlMode: boolean;
+  lastWatchedVideoId: string;
+  lastWatchedProgressSec: number;
+}
+
+export interface ServerEntitlementVerification {
+  uid: string;
+  isPremium: boolean;
+  tier: 'STANDARD' | 'PREMIUM_ENTERPRISE';
+  dailyQuotaUnits: number;
+  verifiedBy: string;
+}
+
 export async function ensureUserProfile(user: User): Promise<void> {
   const uid = sanitizeId(user.uid);
   const path = `users/${uid}`;
   try {
+    const userRef = doc(db, 'users', uid);
+    const existingSnap = await getDocFromServer(userRef).catch(() => null);
+    if (existingSnap && existingSnap.exists()) {
+      return;
+    }
+
+    // Clients MUST initialize `isPremium: false`. Premium entitlement is governed
+    // exclusively by trusted server-side authority (`/api/entitlements/*`) and `isAdmin()` rules.
     await setDoc(
-      doc(db, 'users', uid),
+      userRef,
       {
         ownerId: uid,
         displayName: (user.displayName || user.email || 'Creator').slice(0, 80),
-        isPremium: true,
+        isPremium: false,
         parentalControlMode: false,
         lastWatchedVideoId: 'vid_spatial_8k',
         lastWatchedProgressSec: 0,
@@ -230,6 +264,399 @@ export async function ensureUserProfile(user: User): Promise<void> {
     // Profile may already exist; ignore create collision
   }
   void path;
+}
+
+export async function fetchUserProfile(uid?: string): Promise<UserProfileRecord | null> {
+  const targetUid = sanitizeId(uid || auth.currentUser?.uid || '');
+  if (!targetUid || !auth.currentUser) return null;
+  const path = `users/${targetUid}`;
+  try {
+    const snap = await getDocFromServer(doc(db, 'users', targetUid));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return {
+      ownerId: String(data.ownerId || targetUid),
+      displayName: String(data.displayName || 'Creator'),
+      isPremium: Boolean(data.isPremium),
+      parentalControlMode: Boolean(data.parentalControlMode),
+      lastWatchedVideoId: String(data.lastWatchedVideoId || 'vid_spatial_8k'),
+      lastWatchedProgressSec: Number(data.lastWatchedProgressSec || 0),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function verifyServerEntitlement(): Promise<ServerEntitlementVerification> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    return {
+      uid: 'anonymous',
+      isPremium: false,
+      tier: 'STANDARD',
+      dailyQuotaUnits: 0,
+      verifiedBy: 'UNAUTHENTICATED_FALLBACK',
+    };
+  }
+
+  try {
+    const idToken = await currentUser.getIdToken();
+    const res = await fetch('/api/entitlements/me', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+    if (res.ok) {
+      const data = (await res.json()) as Partial<ServerEntitlementVerification>;
+      return {
+        uid: String(data.uid || currentUser.uid),
+        isPremium: Boolean(data.isPremium),
+        tier: data.tier === 'PREMIUM_ENTERPRISE' ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+        dailyQuotaUnits: Number(data.dailyQuotaUnits || 250),
+        verifiedBy: String(data.verifiedBy || 'SERVER_ENTITLEMENT_AUTHORITY'),
+      };
+    }
+  } catch {
+    // Fallback to Firestore profile read if offline
+  }
+
+  try {
+    const profile = await fetchUserProfile(currentUser.uid);
+    const isVerifiedPremium = Boolean(profile?.isPremium);
+    return {
+      uid: currentUser.uid,
+      isPremium: isVerifiedPremium,
+      tier: isVerifiedPremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+      dailyQuotaUnits: isVerifiedPremium ? 500 : 250,
+      verifiedBy: 'FIRESTORE_ADMIN_GOVERNED_PROFILE',
+    };
+  } catch {
+    return {
+      uid: currentUser.uid,
+      isPremium: false,
+      tier: 'STANDARD',
+      dailyQuotaUnits: 250,
+      verifiedBy: 'DEFAULT_STANDARD_POLICY',
+    };
+  }
+}
+
+export async function setAdminUserPremiumEntitlement(
+  targetUid: string,
+  isPremium: boolean
+): Promise<ServerEntitlementVerification> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Authentication required to manage user entitlements.');
+  }
+  const cleanTargetUid = sanitizeId(targetUid);
+  const idToken = await currentUser.getIdToken();
+
+  const res = await fetch('/api/entitlements/grant', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      targetUid: cleanTargetUid,
+      targetEmail: currentUser.email || undefined,
+      isPremium: Boolean(isPremium),
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(
+      errBody.error ||
+        'Forbidden: Only verified administrators can grant or revoke premium status.'
+    );
+  }
+
+  const path = `users/${cleanTargetUid}`;
+  try {
+    await updateDoc(doc(db, 'users', cleanTargetUid), {
+      isPremium: Boolean(isPremium),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+
+  return (await res.json()) as ServerEntitlementVerification;
+}
+
+export async function ensureDefaultSubscription(user: User): Promise<void> {
+  const uid = sanitizeId(user.uid);
+  const path = `subscriptions/${uid}`;
+  try {
+    const subRef = doc(db, 'subscriptions', uid);
+    const existingSnap = await getDocFromServer(subRef).catch(() => null);
+    if (existingSnap && existingSnap.exists()) {
+      return;
+    }
+
+    // Regular clients initialize FREE_STANDARD (isPremium: false, dailyQuotaUnits: 250)
+    await setDoc(
+      subRef,
+      {
+        ownerId: uid,
+        planId: 'FREE_STANDARD',
+        billingCycle: 'MONTHLY',
+        status: 'ACTIVE',
+        isPremium: false,
+        maxStreamResolution: '4K',
+        dailyQuotaUnits: 250,
+        priceUsdPerPeriod: 0,
+        paymentMethodLast4: 'NONE',
+        cancelAtPeriodEnd: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: false }
+    );
+  } catch {
+    // Subscription document may already exist
+  }
+  void path;
+}
+
+export async function fetchMySubscriptionState(): Promise<{
+  subscription: UserSubscriptionRecord;
+  invoices: SubscriptionInvoiceRecord[];
+  entitlement: ServerEntitlementVerification;
+  remainingDailyQuotaUnits: number;
+}> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    const fallbackSub = createDefaultFreeSubscription('guest_preview', undefined, false);
+    return {
+      subscription: {
+        ...fallbackSub,
+        verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+      },
+      invoices: [],
+      entitlement: {
+        uid: 'guest_preview',
+        isPremium: false,
+        tier: 'STANDARD',
+        dailyQuotaUnits: 250,
+        verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+      },
+      remainingDailyQuotaUnits: 250,
+    };
+  }
+
+  try {
+    const idToken = await currentUser.getIdToken();
+    const res = await fetch('/api/subscriptions/me', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        subscription: data.subscription as UserSubscriptionRecord,
+        invoices: Array.isArray(data.invoices) ? data.invoices : [],
+        entitlement: data.entitlement as ServerEntitlementVerification,
+        remainingDailyQuotaUnits: Number(data.remainingDailyQuotaUnits ?? 250),
+      };
+    }
+  } catch {
+    // Fallback to default free subscription if offline
+  }
+
+  const isMaster = isMasterAdminUser(currentUser);
+  const fallbackSub = createDefaultFreeSubscription(
+    currentUser.uid,
+    currentUser.email || undefined,
+    isMaster
+  );
+  return {
+    subscription: fallbackSub,
+    invoices: [],
+    entitlement: {
+      uid: currentUser.uid,
+      isPremium: fallbackSub.isPremium,
+      tier: fallbackSub.isPremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+      dailyQuotaUnits: fallbackSub.dailyQuotaUnits,
+      verifiedBy: 'SERVER_SUBSCRIPTION_AUTHORITY',
+    },
+    remainingDailyQuotaUnits: fallbackSub.dailyQuotaUnits,
+  };
+}
+
+export async function checkoutSubscriptionOnServer(params: {
+  planId: SubscriptionPlanId;
+  billingCycle: BillingCycle;
+  paymentMethodLast4?: string;
+}): Promise<{
+  message: string;
+  subscription: UserSubscriptionRecord;
+  invoice: SubscriptionInvoiceRecord;
+  invoices: SubscriptionInvoiceRecord[];
+  entitlement: ServerEntitlementVerification;
+  remainingDailyQuotaUnits: number;
+}> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    const { subscription, invoice } = buildSubscriptionCheckoutResult({
+      ownerId: 'guest_preview',
+      planId: params.planId,
+      billingCycle: params.billingCycle,
+      paymentMethodLast4: params.paymentMethodLast4,
+      verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+    });
+    return {
+      message: `Guest Preview: Activated ${params.planId} (${params.billingCycle}) locally. Sign in with Google to persist via Server Subscription Authority.`,
+      subscription,
+      invoice,
+      invoices: [invoice],
+      entitlement: {
+        uid: 'guest_preview',
+        isPremium: subscription.isPremium,
+        tier: subscription.isPremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+        dailyQuotaUnits: subscription.dailyQuotaUnits,
+        verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+      },
+      remainingDailyQuotaUnits: subscription.dailyQuotaUnits,
+    };
+  }
+
+  const idToken = await currentUser.getIdToken();
+  const res = await fetch('/api/subscriptions/checkout', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      planId: params.planId,
+      billingCycle: params.billingCycle,
+      paymentMethodLast4: params.paymentMethodLast4 || '4242',
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error || 'Subscription checkout failed on server.');
+  }
+
+  const data = await res.json();
+  const sub = data.subscription as UserSubscriptionRecord;
+
+  // If the signed-in user is a verified Admin, also mirror full paid tier state to Firestore /subscriptions/{uid}
+  if (isMasterAdminUser(currentUser)) {
+    const uid = sanitizeId(currentUser.uid);
+    try {
+      await setDoc(
+        doc(db, 'subscriptions', uid),
+        {
+          ownerId: uid,
+          planId: sub.planId,
+          billingCycle: sub.billingCycle,
+          status: sub.status,
+          isPremium: sub.isPremium,
+          maxStreamResolution: sub.maxStreamResolution,
+          dailyQuotaUnits: sub.dailyQuotaUnits,
+          priceUsdPerPeriod: sub.priceUsdPerPeriod,
+          paymentMethodLast4: sub.paymentMethodLast4,
+          cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: false }
+      );
+    } catch {
+      // Non-fatal sync
+    }
+  }
+
+  return {
+    message: String(data.message || 'Subscription updated.'),
+    subscription: sub,
+    invoice: data.invoice as SubscriptionInvoiceRecord,
+    invoices: Array.isArray(data.invoices) ? data.invoices : [data.invoice],
+    entitlement: data.entitlement as ServerEntitlementVerification,
+    remainingDailyQuotaUnits: Number(
+      data.remainingDailyQuotaUnits ?? sub.dailyQuotaUnits
+    ),
+  };
+}
+
+export async function cancelSubscriptionOnServer(
+  immediate: boolean = false
+): Promise<{
+  message: string;
+  subscription: UserSubscriptionRecord;
+  invoices: SubscriptionInvoiceRecord[];
+  entitlement: ServerEntitlementVerification;
+  remainingDailyQuotaUnits: number;
+}> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    const fallbackSub = createDefaultFreeSubscription('guest_preview', undefined, false);
+    return {
+      message: 'Guest Preview: Subscription reset to Standard Explorer ($0/mo).',
+      subscription: {
+        ...fallbackSub,
+        verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+      },
+      invoices: [],
+      entitlement: {
+        uid: 'guest_preview',
+        isPremium: false,
+        tier: 'STANDARD',
+        dailyQuotaUnits: 250,
+        verifiedBy: 'GUEST_PREVIEW_SANDBOX',
+      },
+      remainingDailyQuotaUnits: 250,
+    };
+  }
+
+  const idToken = await currentUser.getIdToken();
+  const res = await fetch('/api/subscriptions/cancel', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ immediate }),
+  });
+
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error || 'Failed to cancel subscription.');
+  }
+
+  const data = await res.json();
+  const sub = data.subscription as UserSubscriptionRecord;
+
+  // Subscriber is allowed by Firestore rules to update ['status', 'cancelAtPeriodEnd', 'paymentMethodLast4', 'updatedAt']
+  const uid = sanitizeId(currentUser.uid);
+  try {
+    await updateDoc(doc(db, 'subscriptions', uid), {
+      status: sub.status,
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+      paymentMethodLast4: sub.paymentMethodLast4,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Ignore if document wasn't created yet
+  }
+
+  return {
+    message: String(data.message || 'Subscription canceled.'),
+    subscription: sub,
+    invoices: Array.isArray(data.invoices) ? data.invoices : [],
+    entitlement: data.entitlement as ServerEntitlementVerification,
+    remainingDailyQuotaUnits: Number(
+      data.remainingDailyQuotaUnits ?? sub.dailyQuotaUnits
+    ),
+  };
 }
 
 export async function syncPlaybackProgress(

@@ -119,10 +119,10 @@ npm run lint:rules
 npm run lint
 ```
 
-### What `npm test` Verifies (12 Test Suites)
+### What `npm test` Verifies (13 Test Suites)
 1. **Firebase Firestore Emulator Verification (`firestore.rules.test.ts`)**: Verifies active HTTP connection to the official `cloud-firestore-emulator` (`/emulator/v1/projects/{projectId}:securityRules`) and confirms `firestore.rules` is compiled and loaded by the emulator.
-2. **Dirty Dozen `#1–#12` Adversarial Suite on Firebase Emulator (`firestore.rules.test.ts`)**: Executes all 12 adversarial payloads in [`security_spec.md`](./security_spec.md) against the Firebase Firestore Emulator and verifies every attack returns `PERMISSION_DENIED`.
-3. **Behavioral CRUD & RBAC Across All 7 Collections on Firebase Emulator (`firestore.rules.test.ts`)**: Tests allowed (`assertSucceeds`) and denied (`assertFails`) `getDoc`, `getDocs`, `setDoc`, `updateDoc`, and `deleteDoc` operations on `/videos`, `/videos/{videoId}/comments`, `/playlists`, `/users`, `/admins`, `/moderation_tickets`, `/content_reports`, and `/{document=**}`.
+2. **Dirty Dozen `#1–#12` Adversarial Suite on Firebase Emulator (`firestore.rules.test.ts`)**: Executes all 12 adversarial payloads in [`security_spec.md`](./security_spec.md) (including self-granted `isPremium: true` on `/users/{userId}` create and update) against the Firebase Firestore Emulator and verifies every attack returns `PERMISSION_DENIED`.
+3. **Behavioral CRUD & RBAC Across All 8 Collections on Firebase Emulator (`firestore.rules.test.ts`)**: Tests allowed (`assertSucceeds`) and denied (`assertFails`) `getDoc`, `getDocs`, `setDoc`, `updateDoc`, and `deleteDoc` operations on `/videos`, `/videos/{videoId}/comments`, `/playlists`, `/users` (verifying regular users must create with `isPremium: false` and cannot self-update `isPremium`, while `isAdmin()` can grant/revoke `isPremium`), `/admins`, `/moderation_tickets`, `/content_reports`, `/subscriptions`, and `/{document=**}`.
 4. **4-Tier Role Hierarchy & Least-Privilege Matrix on Firebase Emulator (`firestore.rules.test.ts`)**: Verifies `SUPER_ADMIN` vs. `ADMIN` vs. `GM` vs. `MODERATOR` vs. invalid `/admins` documents on the Firebase Emulator.
 5. **Rule Mutation Sensitivity Proof on Firebase Emulator (`firestore.rules.test.ts`)**: Loads mutated rulesets into the Firebase Firestore Emulator to prove that weakening `isVerifiedUser()` or `hasStaffRole(allowedRoles)` flips test outcomes from denied to allowed.
 6. **AES-256-GCM + AAD Encryption & Tamper Rejection (`src/services/suite.test.ts`)**: Verifies 256-bit WebCrypto encryption, unique 12-byte IVs, and `AEADBadTagException` on AAD or ciphertext tampering.
@@ -131,15 +131,16 @@ npm run lint
 9. **VibePitch Studio Engine & 30-Day Guest Lifecycle (`src/services/suite.test.ts`)**: Verifies `InputBoundsValidator`, 7 vertical presets, 6 outreach scripts, and 30-day guest-to-cloud state transitions.
 10. **100 Vibe Coding Guardrails & 8 Compliance Docs Completeness (`src/services/suite.test.ts`)**: Verifies all 100 guardrails (`#1–#100`) and 8 compliance specifications.
 11. **Server Security Guard — RS256 Firebase JWT Verification (`src/services/suite.test.ts`)**: Verifies cryptographic RS256 signature validation, audience/issuer/expiry checks, and Bearer/WebSocket token extraction.
-12. **Server Security Guard — Rate Limiting, Quotas & Error Sanitization (`src/services/suite.test.ts`)**: Verifies per-IP and per-user sliding-window rate limits, weighted daily quotas, `/live` WebSocket concurrency caps, and error redaction.
+12. **Server Security Guard — Rate Limiting, Quotas, Server Entitlements & Error Sanitization (`src/services/suite.test.ts`)**: Verifies per-IP and per-user sliding-window rate limits, weighted daily quotas (`250` standard / `500` premium / `1,000` admin), server-authoritative `isPremium` entitlement enforcement (`getUserEntitlement`, `setUserEntitlement`), `/live` WebSocket concurrency caps, and error redaction.
+13. **Subscription & Billing Engine (`src/services/subscriptionEngine.ts`, `src/services/suite.test.ts`)**: Verifies 3-tier pricing (`FREE_STANDARD`, `PRO_8K_CREATOR`, `STUDIO_32K_ENTERPRISE`), annual 20% discount math (`$180/yr` Pro 8K, `$468/yr` Studio 32K), invoice generation, and server-side `checkoutUserSubscription` / `cancelUserSubscription` synchronization with `isPremium` and daily AI quota allowances (`250` / `500` / `1,000` units/day).
 
 ---
 
 ## 7. Project Structure
 
 ```text
-├── server.ts                         # Express + WebSocket (/live) server with RS256 JWT & quota guard
-├── firestore.rules                   # Production Firestore Security Rules (4-tier RBAC + schema guards)
+├── server.ts                         # Express + WebSocket (/live) server with RS256 JWT, subscription, entitlement & quota guard
+├── firestore.rules                   # Production Firestore Security Rules (4-tier RBAC + /users & /subscriptions entitlement guards)
 ├── firestore.rules.test.ts           # Emulator-backed Firestore Rules test suite (@firebase/rules-unit-testing)
 ├── firebase.json                     # Firebase CLI & Firestore Emulator configuration (127.0.0.1:8088)
 ├── .firebaserc                       # Firebase project alias configuration
@@ -154,18 +155,20 @@ npm run lint
     ├── scene/
     │   └── SpatialStudio.ts          # WebXR 3D Broadcast Rig, 36-node CDN ring & PDB molecular viewer
     ├── services/
-    │   ├── serverSecurityGuard.ts    # RS256 Firebase ID token verifier, rate limiter & quota governor
+    │   ├── serverSecurityGuard.ts    # RS256 Firebase ID token verifier, rate limiter, quota, entitlement & subscription governor
+    │   ├── subscriptionEngine.ts     # 3-tier subscription catalog, monthly/annual pricing math & invoice generator
     │   ├── firestoreRulesHarness.ts  # Firebase Firestore Emulator lifecycle manager & @firebase/rules-unit-testing harness
-    │   ├── firebase.ts               # Firebase Auth, Firestore CRUD helpers & error handler
+    │   ├── firebase.ts               # Firebase Auth, Firestore CRUD helpers, server entitlement/subscription client & error handler
     │   ├── cryptoAes256.ts           # NIST SP 800-38D WebCrypto AES-256-GCM + AAD engine
     │   ├── hardwareGovernor.ts       # 90Hz/60Hz frame governor, GPU temp/clock monitor & 4GB RAM governor
     │   ├── vibePitchEngine.ts        # 7-vertical quote calculator, bounds validator & 6-script engine
     │   ├── complianceAndGuardrails.ts# 100 Vibe Coding Guardrails & 8-Document Compliance catalog
     │   ├── youtube.ts                # YouTube Data API v3 Liked Videos & quota telemetry service
     │   ├── catalog.ts                # Deterministic seed streams, codecs & spatial audio presets
-    │   └── suite.test.ts             # Unit test suite for all pure domain, HUD & security services
+    │   └── suite.test.ts             # Unit test suite for all pure domain, HUD, subscription & security services
     └── ui/
         ├── AppShell.ts               # Main 2D HUD, modals, Gemini AI studio & Admin/GM console
+        ├── SubscriptionView.ts       # Plans & Billing workspace (3-tier matrix, annual toggle, quota meter & invoice ledger)
         ├── HardwareTelemetryHud.ts   # Live Frame Rate, 4GB RAM Memory Usage & GPU Temp HUD component
         ├── ComplianceAndHardwareModals.ts # Compliance Hub, Hardware Governor Modal & AES-256 Vault UI
         └── LumenPlatformView.ts      # Lumen Video Platform player, search, comments & playlists UI
@@ -176,8 +179,8 @@ npm run lint
 ## 8. Architecture, RBAC & Quota Reference
 
 ### 8.1 Seven Core Architectural Pillars
-1. **Server-Side Gemini API Security Governor (`src/services/serverSecurityGuard.ts` & `server.ts`)**: Mandatory RS256 Firebase ID Token verification on all 10 `/api/gemini/*` routes and `/live` WebSocket upgrades, sliding-window rate limits, weighted daily quotas, `64kb`/`10mb` body caps, and sanitized `{ error, code, requestId }` responses.
-2. **Firebase Emulator-Backed Firestore Security Rules & 4-Tier RBAC (`firestore.rules`, `src/services/firestoreRulesHarness.ts`, `firestore.rules.test.ts`)**: Official `cloud-firestore-emulator` + `@firebase/rules-unit-testing` verification and strict role enforcement via `hasStaffRole(allowedRoles)` across `SUPER_ADMIN`, `ADMIN`, `GM`, and `MODERATOR`.
+1. **Server-Side Gemini API Security, Subscription & Entitlement Governor (`src/services/serverSecurityGuard.ts`, `src/services/subscriptionEngine.ts` & `server.ts`)**: Mandatory RS256 Firebase ID Token verification on all 10 `/api/gemini/*` routes, `/api/entitlements/*` routes, `/api/subscriptions/*` routes, and `/live` WebSocket upgrades; server-authoritative `isPremium` entitlement & subscription tier enforcement (`FREE_STANDARD`, `PRO_8K_CREATOR`, `STUDIO_32K_ENTERPRISE`); sliding-window rate limits; weighted daily quotas (`250` standard / `500` Pro 8K / `1,000` Studio 32K & Admin); `64kb`/`10mb` body caps; and sanitized `{ error, code, requestId }` responses.
+2. **Firebase Emulator-Backed Firestore Security Rules, Entitlement Isolation & 4-Tier RBAC (`firestore.rules`, `src/services/firestoreRulesHarness.ts`, `firestore.rules.test.ts`)**: Official `cloud-firestore-emulator` + `@firebase/rules-unit-testing` verification, strict role enforcement via `hasStaffRole(allowedRoles)` across `SUPER_ADMIN`, `ADMIN`, `GM`, and `MODERATOR`, and `/users/{userId}` + `/subscriptions/{subscriptionId}` entitlement protection (`incoming().isPremium == false || isAdmin()` on create; owners cannot self-upgrade `isPremium` or paid `planId`).
 3. **AES-256-GCM Authenticated Encryption Engine (`src/services/cryptoAes256.ts`)**: WebCrypto `AES-256-GCM` with 12-byte CSPRNG IVs, 128-bit auth tags, `user_id:<uid>|record_id:<id>` AAD binding, and 64 KB chunked streaming.
 4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB LPDDR4X RAM) Hardware Telemetry Governor & Live HUD (`src/services/hardwareGovernor.ts` & `src/ui/HardwareTelemetryHud.ts`)**: Real-time **Frame Rate** (`currentFps`, `1% Low FPS`, 24-frame sparkline from a zero-GC `Float32Array(120)` ring buffer), **Memory Usage** (`usedRamMb / 4096 MB`, `memoryUsagePercent%`, `availableRamMb MB Free`, segmented LPDDR4X bar, and one-click/auto `Level 80` RAM trim), and **GPU Temperature & Clock** (`gpuTempCelsius°C`, `socTempCelsius°C`, `gpuClockMhz MHz`, `gpuLoadPercent%` load, interactive `28–58°C` thermal sensor simulator, `45°C` 60Hz throttle, and `50°C` `SAVER_720P_SCALE` downscaling) rendered via a Top-Bar Telemetry Pill, a collapsible bottom-right Floating Telemetry HUD (`#hw-telemetry-floating-hud`), and the full Hardware Governor Modal.
 5. **VibePitch Studio 7-Vertical Quote & Script Engine (`src/services/vibePitchEngine.ts`)**: `InputBoundsValidator`, 7 local business verticals, 6 outreach scripts, and 30-day guest-to-cloud lifecycle.
@@ -192,6 +195,8 @@ npm run lint
 | **Read other `/admins/{adminId}`** | Denied | Denied | Allowed | Allowed |
 | **Create / Update / Delete `GM` & `MODERATOR` in `/admins`** | Denied | Denied | Allowed | Allowed |
 | **Create / Update / Delete `SUPER_ADMIN` & `ADMIN` in `/admins`** | Denied | Denied | Denied | Allowed |
+| **Grant / Revoke `isPremium` on `/users/{userId}`** | Denied | Denied | Allowed | Allowed |
+| **Provision Paid Tiers on `/subscriptions/{subscriptionId}`** | Denied | Denied | Allowed | Allowed |
 | **Restrict `ageRating` on `/videos/{videoId}`** | Allowed | Allowed | Allowed | Allowed |
 | **Update full metadata (`title`, `description`, etc.) on `/videos`** | Denied | Allowed | Allowed | Allowed |
 | **Delete `/videos/{videoId}` (non-owner)** | Denied | Denied | Allowed | Allowed |
@@ -204,10 +209,16 @@ npm run lint
 | **Override terminal (`ACTIONED` / `DISMISSED`) `/content_reports`** | Denied | Denied | Allowed | Allowed |
 | **Delete `/moderation_tickets` or `/content_reports` (non-owner)** | Denied | Denied | Allowed | Allowed |
 
-### 8.3 Gemini API Endpoint Quota & Rate-Limit Matrix (`server.ts`)
+### 8.3 Gemini API, Subscription & Entitlement Endpoint Matrix (`server.ts`)
 
 | Endpoint | Category | Cost Units | Max Req / Min (User) | Max Prompt Chars | Body Limit |
 | :--- | :--- | :---: | :---: | :---: | :---: |
+| `GET /api/entitlements/me` | `ENTITLEMENT_VERIFY` | `0` | RS256 Auth Verified | — | — |
+| `POST /api/entitlements/grant` | `ENTITLEMENT_ADMIN` | `0` | Admin Only (`403` for non-admin) | — | `64kb` |
+| `GET /api/subscriptions/plans` | `SUBSCRIPTION_CATALOG` | `0` | Public Catalog | — | — |
+| `GET /api/subscriptions/me` | `SUBSCRIPTION_STATE` | `0` | RS256 Auth Verified | — | — |
+| `POST /api/subscriptions/checkout` | `SUBSCRIPTION_BILLING` | `0` | RS256 Auth Verified | — | `64kb` |
+| `POST /api/subscriptions/cancel` | `SUBSCRIPTION_BILLING` | `0` | RS256 Auth Verified | — | `64kb` |
 | `POST /api/gemini/fast-assist` | `FAST_ASSIST` | `1` | `15 / min` | `2,000` | `64kb` |
 | `POST /api/gemini/chat` | `CHAT_AND_GROUNDING` | `2` | `12 / min` | `4,000` | `64kb` |
 | `POST /api/gemini/search-grounding` | `CHAT_AND_GROUNDING` | `2` | `10 / min` | `1,000` | `64kb` |
@@ -218,7 +229,7 @@ npm run lint
 | `POST /api/gemini/generate-image` | `IMAGE_AND_MUSIC` | `10` | `4 / min` | `2,000` | `10mb` |
 | `POST /api/gemini/generate-music` | `IMAGE_AND_MUSIC` | `10` | `4 / min` | `2,000` | `64kb` |
 | `POST /api/gemini/generate-video` | `VIDEO_AND_LIVE` | `25` | `2 / min` | `2,000` | `10mb` |
-| `WS /live?token=<idToken>` | `VIDEO_AND_LIVE` | `25` | `3 / min` (1 concurrent) | `2,000` | `128kb/msg` |
+| `WS /live?token=<idToken>` | `VIDEO_AND_LIVE` | `25` | `3 / min` (1 concurrent) | `2,000` | `64kb/msg` |
 
 ---
 

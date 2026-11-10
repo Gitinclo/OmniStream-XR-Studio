@@ -15,6 +15,17 @@
  */
 
 import crypto from 'node:crypto';
+import {
+  BillingCycle,
+  SUBSCRIPTION_PLANS,
+  SubscriptionInvoiceRecord,
+  SubscriptionPlanId,
+  UserSubscriptionRecord,
+  buildSubscriptionCheckoutResult,
+  createDefaultFreeSubscription,
+  isValidBillingCycle,
+  isValidSubscriptionPlanId,
+} from './subscriptionEngine';
 
 export type GeminiEndpointCategory =
   | 'FAST_ASSIST'
@@ -327,10 +338,42 @@ export async function verifyFirebaseIdToken(
   }
 }
 
+export interface UserEntitlementRecord {
+  uid: string;
+  email?: string;
+  isPremium: boolean;
+  tier: 'STANDARD' | 'PREMIUM_ENTERPRISE';
+  dailyQuotaUnits: number;
+  verifiedBy: 'SERVER_ENTITLEMENT_AUTHORITY';
+  grantedBy: string;
+  updatedAtIso: string;
+}
+
+export interface EntitlementGrantDecision {
+  allowed: boolean;
+  statusCode: 200 | 400 | 401 | 403;
+  errorCode: string;
+  publicMessage: string;
+  record?: UserEntitlementRecord;
+}
+
+export interface SubscriptionMutationDecision {
+  allowed: boolean;
+  statusCode: 200 | 400 | 401;
+  errorCode: string;
+  publicMessage: string;
+  subscription?: UserSubscriptionRecord;
+  invoice?: SubscriptionInvoiceRecord;
+  invoices?: SubscriptionInvoiceRecord[];
+  entitlement?: UserEntitlementRecord;
+  remainingDailyQuotaUnits?: number;
+}
+
 export interface SecurityGuardOptions {
   windowMs?: number;
   maxIpRequestsPerWindow?: number;
   defaultUserDailyQuotaUnits?: number;
+  premiumUserDailyQuotaUnits?: number;
   adminUserDailyQuotaUnits?: number;
   globalDailyQuotaUnits?: number;
   maxConcurrentLiveSessionsPerUser?: number;
@@ -338,12 +381,14 @@ export interface SecurityGuardOptions {
 }
 
 /**
- * Stateful Rate Limiter & Weighted Quota Governor for `/api/gemini/*` and `/live`.
+ * Stateful Rate Limiter, Weighted Quota Governor & Server-Side Entitlement/Subscription Authority
+ * for `/api/gemini/*`, `/api/entitlements/*`, `/api/subscriptions/*`, and `/live`.
  */
 export class GeminiApiSecurityGovernor {
   private readonly windowMs: number;
   private readonly maxIpRequestsPerWindow: number;
   private readonly defaultUserDailyQuotaUnits: number;
+  private readonly premiumUserDailyQuotaUnits: number;
   private readonly adminUserDailyQuotaUnits: number;
   private readonly globalDailyQuotaUnits: number;
   private readonly maxConcurrentLiveSessionsPerUser: number;
@@ -355,15 +400,300 @@ export class GeminiApiSecurityGovernor {
   private globalDailyQuota = { dayKey: '', units: 0 };
   private activeLiveSessionsByUser = new Map<string, number>();
   private totalActiveLiveSessions = 0;
+  private entitlementRegistry = new Map<string, UserEntitlementRecord>();
+  private subscriptionRegistry = new Map<string, UserSubscriptionRecord>();
+  private invoiceRegistry = new Map<string, SubscriptionInvoiceRecord[]>();
 
   constructor(options: SecurityGuardOptions = {}) {
     this.windowMs = options.windowMs ?? 60_000;
     this.maxIpRequestsPerWindow = options.maxIpRequestsPerWindow ?? 30;
     this.defaultUserDailyQuotaUnits = options.defaultUserDailyQuotaUnits ?? 250;
+    this.premiumUserDailyQuotaUnits = options.premiumUserDailyQuotaUnits ?? 500;
     this.adminUserDailyQuotaUnits = options.adminUserDailyQuotaUnits ?? 1000;
     this.globalDailyQuotaUnits = options.globalDailyQuotaUnits ?? 5000;
     this.maxConcurrentLiveSessionsPerUser = options.maxConcurrentLiveSessionsPerUser ?? 1;
     this.maxGlobalConcurrentLiveSessions = options.maxGlobalConcurrentLiveSessions ?? 5;
+  }
+
+  /**
+   * Returns the server-authoritative entitlement state for a verified user identity.
+   * Regular users default to `isPremium: false` (`STANDARD`) unless explicitly granted
+   * by a trusted server administrator (`setUserEntitlement`), an active verified subscription,
+   * or verified master admin.
+   */
+  public getUserEntitlement(
+    identity: VerifiedClientIdentity,
+    nowMs: number = Date.now()
+  ): UserEntitlementRecord {
+    const existing = this.entitlementRegistry.get(identity.uid);
+    if (existing) {
+      return existing;
+    }
+
+    const isAdmin = identity.isAdmin === true;
+    const isPremium = isAdmin;
+    const dailyQuotaUnits = isAdmin
+      ? this.adminUserDailyQuotaUnits
+      : this.defaultUserDailyQuotaUnits;
+
+    return {
+      uid: identity.uid,
+      email: identity.email,
+      isPremium,
+      tier: isPremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+      dailyQuotaUnits,
+      verifiedBy: 'SERVER_ENTITLEMENT_AUTHORITY',
+      grantedBy: isAdmin ? 'SYSTEM_ADMIN_BOOTSTRAP' : 'DEFAULT_STANDARD_POLICY',
+      updatedAtIso: new Date(nowMs).toISOString(),
+    };
+  }
+
+  /**
+   * Returns the user's server-authoritative subscription state, invoice history,
+   * and synchronized entitlement record.
+   */
+  public getUserSubscription(
+    identity: VerifiedClientIdentity,
+    nowMs: number = Date.now()
+  ): {
+    subscription: UserSubscriptionRecord;
+    invoices: SubscriptionInvoiceRecord[];
+    entitlement: UserEntitlementRecord;
+    remainingDailyQuotaUnits: number;
+  } {
+    let sub = this.subscriptionRegistry.get(identity.uid);
+    if (!sub) {
+      sub = createDefaultFreeSubscription(
+        identity.uid,
+        identity.email,
+        identity.isAdmin,
+        nowMs
+      );
+      this.subscriptionRegistry.set(identity.uid, sub);
+    }
+
+    const invoices = this.invoiceRegistry.get(identity.uid) || [];
+    const entitlement = this.getUserEntitlement(identity, nowMs);
+    const remainingDailyQuotaUnits = this.getRemainingUserQuota(identity, nowMs);
+
+    return {
+      subscription: sub,
+      invoices,
+      entitlement,
+      remainingDailyQuotaUnits,
+    };
+  }
+
+  /**
+   * Processes a server-side subscription plan checkout or billing cycle change.
+   * Atomically updates the user's subscription record, invoice ledger, and
+   * server-side entitlement record (`isPremium`, `dailyQuotaUnits`).
+   */
+  public checkoutUserSubscription(params: {
+    identity: VerifiedClientIdentity | null;
+    planId: unknown;
+    billingCycle: unknown;
+    paymentMethodLast4?: string;
+    nowMs?: number;
+  }): SubscriptionMutationDecision {
+    const nowMs = params.nowMs ?? Date.now();
+    if (!params.identity) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        errorCode: 'UNAUTHENTICATED',
+        publicMessage: 'Authentication required to manage subscriptions.',
+      };
+    }
+
+    if (!isValidSubscriptionPlanId(params.planId)) {
+      return {
+        allowed: false,
+        statusCode: 400,
+        errorCode: 'INVALID_SUBSCRIPTION_PLAN',
+        publicMessage:
+          'Invalid subscription planId. Expected FREE_STANDARD, PRO_8K_CREATOR, or STUDIO_32K_ENTERPRISE.',
+      };
+    }
+
+    const billingCycle: BillingCycle = isValidBillingCycle(params.billingCycle)
+      ? params.billingCycle
+      : 'MONTHLY';
+
+    const { subscription, invoice } = buildSubscriptionCheckoutResult({
+      ownerId: params.identity.uid,
+      email: params.identity.email,
+      planId: params.planId,
+      billingCycle,
+      paymentMethodLast4: params.paymentMethodLast4,
+      verifiedBy: 'SERVER_SUBSCRIPTION_AUTHORITY',
+      nowMs,
+    });
+
+    this.subscriptionRegistry.set(params.identity.uid, subscription);
+
+    const existingInvoices = this.invoiceRegistry.get(params.identity.uid) || [];
+    const updatedInvoices = [invoice, ...existingInvoices].slice(0, 25);
+    this.invoiceRegistry.set(params.identity.uid, updatedInvoices);
+
+    const isEffectivePremium = Boolean(
+      subscription.isPremium || params.identity.isAdmin
+    );
+    const effectiveDailyQuota = params.identity.isAdmin
+      ? Math.max(this.adminUserDailyQuotaUnits, subscription.dailyQuotaUnits)
+      : subscription.dailyQuotaUnits;
+
+    const entitlementRecord: UserEntitlementRecord = {
+      uid: params.identity.uid,
+      email: params.identity.email,
+      isPremium: isEffectivePremium,
+      tier: isEffectivePremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+      dailyQuotaUnits: effectiveDailyQuota,
+      verifiedBy: 'SERVER_ENTITLEMENT_AUTHORITY',
+      grantedBy: `SUBSCRIPTION_CHECKOUT:${subscription.planId}:${subscription.billingCycle}`,
+      updatedAtIso: new Date(nowMs).toISOString(),
+    };
+    this.entitlementRegistry.set(params.identity.uid, entitlementRecord);
+
+    return {
+      allowed: true,
+      statusCode: 200,
+      errorCode: 'OK',
+      publicMessage: `Subscribed to ${SUBSCRIPTION_PLANS[params.planId].name} (${billingCycle}).`,
+      subscription,
+      invoice,
+      invoices: updatedInvoices,
+      entitlement: entitlementRecord,
+      remainingDailyQuotaUnits: this.getRemainingUserQuota(params.identity, nowMs),
+    };
+  }
+
+  /**
+   * Cancels an active subscription either at period end (`immediate: false`) or
+   * downgrades immediately to `FREE_STANDARD` (`immediate: true`).
+   */
+  public cancelUserSubscription(params: {
+    identity: VerifiedClientIdentity | null;
+    immediate?: boolean;
+    nowMs?: number;
+  }): SubscriptionMutationDecision {
+    const nowMs = params.nowMs ?? Date.now();
+    if (!params.identity) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        errorCode: 'UNAUTHENTICATED',
+        publicMessage: 'Authentication required to cancel a subscription.',
+      };
+    }
+
+    const current = this.getUserSubscription(params.identity, nowMs).subscription;
+    if (params.immediate) {
+      return this.checkoutUserSubscription({
+        identity: params.identity,
+        planId: 'FREE_STANDARD' as SubscriptionPlanId,
+        billingCycle: 'MONTHLY',
+        nowMs,
+      });
+    }
+
+    const canceledSub: UserSubscriptionRecord = {
+      ...current,
+      status:
+        current.planId === 'FREE_STANDARD' ? 'ACTIVE' : 'CANCELED_AT_PERIOD_END',
+      cancelAtPeriodEnd: current.planId !== 'FREE_STANDARD',
+      updatedAtIso: new Date(nowMs).toISOString(),
+    };
+    this.subscriptionRegistry.set(params.identity.uid, canceledSub);
+
+    return {
+      allowed: true,
+      statusCode: 200,
+      errorCode: 'OK',
+      publicMessage:
+        current.planId === 'FREE_STANDARD'
+          ? 'Account is already on the Standard Explorer ($0) plan.'
+          : 'Subscription scheduled to cancel at the end of the current billing period. Premium benefits remain active until period end.',
+      subscription: canceledSub,
+      invoices: this.invoiceRegistry.get(params.identity.uid) || [],
+      entitlement: this.getUserEntitlement(params.identity, nowMs),
+      remainingDailyQuotaUnits: this.getRemainingUserQuota(params.identity, nowMs),
+    };
+  }
+
+  /**
+   * Grants or revokes `isPremium` entitlement on the server.
+   * Strictly restricted to verified server administrators (`actor.isAdmin === true`).
+   * Regular users attempting to self-grant `isPremium: true` are rejected with 403 Forbidden.
+   */
+  public setUserEntitlement(params: {
+    actor: VerifiedClientIdentity | null;
+    targetUid: string;
+    targetEmail?: string;
+    isPremium: boolean;
+    nowMs?: number;
+  }): EntitlementGrantDecision {
+    const nowMs = params.nowMs ?? Date.now();
+    if (!params.actor) {
+      return {
+        allowed: false,
+        statusCode: 401,
+        errorCode: 'UNAUTHENTICATED',
+        publicMessage: 'Authentication required to verify or modify account entitlements.',
+      };
+    }
+
+    if (!params.actor.isAdmin) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        errorCode: 'ENTITLEMENT_ADMIN_REQUIRED',
+        publicMessage:
+          'Forbidden: Users cannot self-grant or modify premium entitlement status. Premium entitlements are enforced by server authority.',
+      };
+    }
+
+    const cleanUid = String(params.targetUid || '').trim();
+    if (!cleanUid || cleanUid.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(cleanUid)) {
+      return {
+        allowed: false,
+        statusCode: 400,
+        errorCode: 'INVALID_TARGET_UID',
+        publicMessage: 'Invalid targetUid format for entitlement update.',
+      };
+    }
+
+    const isPremium = Boolean(params.isPremium);
+    const isTargetMasterAdmin =
+      params.targetEmail?.toLowerCase() === 'creatergame31@gmail.com' ||
+      (cleanUid === params.actor.uid && params.actor.isAdmin);
+
+    const dailyQuotaUnits = isTargetMasterAdmin
+      ? this.adminUserDailyQuotaUnits
+      : isPremium
+      ? this.premiumUserDailyQuotaUnits
+      : this.defaultUserDailyQuotaUnits;
+
+    const record: UserEntitlementRecord = {
+      uid: cleanUid,
+      email: params.targetEmail,
+      isPremium,
+      tier: isPremium ? 'PREMIUM_ENTERPRISE' : 'STANDARD',
+      dailyQuotaUnits,
+      verifiedBy: 'SERVER_ENTITLEMENT_AUTHORITY',
+      grantedBy: params.actor.email || params.actor.uid,
+      updatedAtIso: new Date(nowMs).toISOString(),
+    };
+
+    this.entitlementRegistry.set(cleanUid, record);
+
+    return {
+      allowed: true,
+      statusCode: 200,
+      errorCode: 'OK',
+      publicMessage: `Server entitlement updated: ${cleanUid} isPremium=${isPremium}`,
+      record,
+    };
   }
 
   private getDayKey(nowMs: number): string {
@@ -373,6 +703,22 @@ export class GeminiApiSecurityGovernor {
   private pruneWindow(timestamps: number[], nowMs: number): number[] {
     const cutoff = nowMs - this.windowMs;
     return timestamps.filter((t) => t > cutoff);
+  }
+
+  private resolveUserMaxDailyQuota(identity: VerifiedClientIdentity): number {
+    const entitlement = this.entitlementRegistry.get(identity.uid);
+    if (entitlement && typeof entitlement.dailyQuotaUnits === 'number') {
+      return identity.isAdmin
+        ? Math.max(this.adminUserDailyQuotaUnits, entitlement.dailyQuotaUnits)
+        : entitlement.dailyQuotaUnits;
+    }
+    if (identity.isAdmin) {
+      return this.adminUserDailyQuotaUnits;
+    }
+    if (entitlement?.isPremium) {
+      return this.premiumUserDailyQuotaUnits;
+    }
+    return this.defaultUserDailyQuotaUnits;
   }
 
   /**
@@ -448,9 +794,7 @@ export class GeminiApiSecurityGovernor {
       this.globalDailyQuota = { dayKey, units: 0 };
     }
 
-    const userMaxDaily = params.identity.isAdmin
-      ? this.adminUserDailyQuotaUnits
-      : this.defaultUserDailyQuotaUnits;
+    const userMaxDaily = this.resolveUserMaxDailyQuota(params.identity);
 
     const currentUserQuota = this.userDailyQuotaUsed.get(params.identity.uid);
     const usedUnits =
@@ -497,9 +841,7 @@ export class GeminiApiSecurityGovernor {
     nowMs: number = Date.now()
   ): number {
     const dayKey = this.getDayKey(nowMs);
-    const userMaxDaily = identity.isAdmin
-      ? this.adminUserDailyQuotaUnits
-      : this.defaultUserDailyQuotaUnits;
+    const userMaxDaily = this.resolveUserMaxDailyQuota(identity);
     const current = this.userDailyQuotaUsed.get(identity.uid);
     const used = current && current.dayKey === dayKey ? current.units : 0;
     return Math.max(0, userMaxDaily - used);

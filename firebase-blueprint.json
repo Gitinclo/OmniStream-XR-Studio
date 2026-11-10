@@ -180,7 +180,7 @@
         },
         "isPremium": {
           "type": "boolean",
-          "description": "Ad-free premium status"
+          "description": "Server/Admin-governed ad-free premium entitlement flag (clients must initialize to false and cannot self-update)"
         },
         "parentalControlMode": {
           "type": "boolean",
@@ -466,6 +466,94 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "Subscription": {
+      "title": "Subscription",
+      "description": "User subscription plan, billing cycle, and server-governed entitlement record",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of subscriber",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "planId": {
+          "type": "string",
+          "description": "Subscription tier identifier",
+          "enum": ["FREE_STANDARD", "PRO_8K_CREATOR", "STUDIO_32K_ENTERPRISE"],
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "billingCycle": {
+          "type": "string",
+          "description": "Billing cadence (MONTHLY or ANNUAL)",
+          "enum": ["MONTHLY", "ANNUAL"],
+          "minLength": 6,
+          "maxLength": 10
+        },
+        "status": {
+          "type": "string",
+          "description": "Subscription lifecycle state",
+          "enum": ["ACTIVE", "CANCELED_AT_PERIOD_END", "PAST_DUE"],
+          "minLength": 6,
+          "maxLength": 24
+        },
+        "isPremium": {
+          "type": "boolean",
+          "description": "Server/Admin-governed ad-free entitlement flag"
+        },
+        "maxStreamResolution": {
+          "type": "string",
+          "description": "Maximum allowed stream resolution (4K, 8K, 32K)",
+          "enum": ["4K", "8K", "32K"],
+          "minLength": 2,
+          "maxLength": 4
+        },
+        "dailyQuotaUnits": {
+          "type": "number",
+          "description": "Daily weighted Gemini Studio quota unit allowance"
+        },
+        "priceUsdPerPeriod": {
+          "type": "number",
+          "description": "Billed price in USD per period"
+        },
+        "paymentMethodLast4": {
+          "type": "string",
+          "description": "Last 4 digits of payment method or NONE",
+          "minLength": 4,
+          "maxLength": 4
+        },
+        "cancelAtPeriodEnd": {
+          "type": "boolean",
+          "description": "Whether the subscription is scheduled to cancel at period end"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "ownerId",
+        "planId",
+        "billingCycle",
+        "status",
+        "isPremium",
+        "maxStreamResolution",
+        "dailyQuotaUnits",
+        "priceUsdPerPeriod",
+        "paymentMethodLast4",
+        "cancelAtPeriodEnd",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -496,6 +584,10 @@
     "/content_reports/{reportId}": {
       "schema": { "$ref": "#/entities/ContentReport" },
       "description": "User-submitted content reports reviewed by admins from their dashboard"
+    },
+    "/subscriptions/{subscriptionId}": {
+      "schema": { "$ref": "#/entities/Subscription" },
+      "description": "User subscription plan, billing cadence, and server-governed entitlement state"
     }
   }
 }
