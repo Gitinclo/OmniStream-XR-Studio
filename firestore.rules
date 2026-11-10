@@ -16,12 +16,38 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    // Bootstrapped Admin / GM / Moderator Authority (creatergame31@gmail.com + /admins registry)
+    // Bootstrapped Master Super-Admin Authority (creatergame31@gmail.com)
+    function isPrimaryMasterAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'creatergame31@gmail.com';
+    }
+
+    // Role-Verified Staff Lookup on /admins/{uid}
+    // Explicitly verifies document existence, targetUid binding, and that `data.role` is in `allowedRoles`.
+    function hasStaffRole(allowedRoles) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.targetUid == request.auth.uid
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in allowedRoles;
+    }
+
+    // Tier 1: SUPER_ADMIN (Bootstrapped creatergame31@gmail.com or /admins/{uid} with role == 'SUPER_ADMIN')
+    function isSuperAdmin() {
+      return isPrimaryMasterAdmin() || hasStaffRole(['SUPER_ADMIN']);
+    }
+
+    // Tier 2: ADMIN (SUPER_ADMIN or /admins/{uid} with role == 'ADMIN')
     function isAdmin() {
-      return isVerifiedUser() && (
-        request.auth.token.email == 'creatergame31@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      return isPrimaryMasterAdmin() || hasStaffRole(['SUPER_ADMIN', 'ADMIN']);
+    }
+
+    // Tier 3: GM / Game Master (SUPER_ADMIN, ADMIN, or /admins/{uid} with role == 'GM')
+    function isGM() {
+      return isPrimaryMasterAdmin() || hasStaffRole(['SUPER_ADMIN', 'ADMIN', 'GM']);
+    }
+
+    // Tier 4: MODERATOR (SUPER_ADMIN, ADMIN, GM, or /admins/{uid} with role == 'MODERATOR')
+    function isModerator() {
+      return isPrimaryMasterAdmin() || hasStaffRole(['SUPER_ADMIN', 'ADMIN', 'GM', 'MODERATOR']);
     }
 
     function isValidId(id) {
@@ -196,11 +222,15 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action 1: Owner or Admin/Moderator metadata & ageRating moderation update
-          ((existing().ownerId == request.auth.uid || isAdmin())
+          // Action 1a: Owner or GM/Admin/SuperAdmin full metadata & ageRating update
+          ((existing().ownerId == request.auth.uid || isGM())
             && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'resolution', 'ageRating', 'updatedAt']))
           ||
-          // Action 2: View counter increment
+          // Action 1b: Moderator ageRating classification restriction only
+          (isModerator()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['ageRating', 'updatedAt']))
+          ||
+          // Action 2: View counter increment (+1)
           (incoming().diff(existing()).affectedKeys().hasOnly(['views', 'updatedAt'])
             && incoming().views == existing().views + 1)
         );
@@ -233,7 +263,7 @@ service cloud.firestore {
         allow delete: if isVerifiedUser()
           && isValidId(videoId)
           && isValidId(commentId)
-          && (existing().ownerId == request.auth.uid || isAdmin());
+          && (existing().ownerId == request.auth.uid || isModerator());
       }
     }
 
@@ -259,7 +289,7 @@ service cloud.firestore {
         && existing().ownerId == request.auth.uid;
     }
 
-    // User Profiles Collection (Isolated to Owner or Admin)
+    // User Profiles Collection (Isolated to Owner)
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && existing().ownerId == request.auth.uid;
       allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
@@ -291,32 +321,46 @@ service cloud.firestore {
     }
 
     // Administration, GM, Admin & Moderator Staff Registry (/admins/{adminId})
+    // Enforces strict role hierarchy:
+    // - SUPER_ADMIN can manage all staff tiers (SUPER_ADMIN, ADMIN, GM, MODERATOR).
+    // - ADMIN can only manage subordinate staff tiers (GM, MODERATOR).
+    // - GM and MODERATOR cannot create, update, or delete /admins documents.
     match /admins/{adminId} {
       allow get: if isSignedIn() && isValidId(adminId) && (adminId == request.auth.uid || isAdmin());
       allow list: if isVerifiedUser()
         && (request.auth.token.email == 'creatergame31@gmail.com' || existing().targetUid == request.auth.uid)
         && existing().role in ['SUPER_ADMIN', 'GM', 'ADMIN', 'MODERATOR'];
-      allow create: if isAdmin()
-        && isValidId(adminId)
+      allow create: if isValidId(adminId)
         && isValidAdminRole(incoming())
         && incoming().targetUid == adminId
         && incoming().assignedByUid == request.auth.uid
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isAdmin()
-        && isValidId(adminId)
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin()
+          || (isAdmin() && incoming().role in ['GM', 'MODERATOR'])
+        );
+      allow update: if isValidId(adminId)
         && isValidAdminRole(incoming())
         && incoming().targetUid == existing().targetUid
         && incoming().createdAt == existing().createdAt
         && incoming().assignedByUid == request.auth.uid
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'permissions', 'assignedByUid', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(adminId);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'permissions', 'assignedByUid', 'updatedAt'])
+        && (
+          isSuperAdmin()
+          || (isAdmin() && existing().role in ['GM', 'MODERATOR'] && incoming().role in ['GM', 'MODERATOR'])
+        );
+      allow delete: if isValidId(adminId)
+        && (
+          isSuperAdmin()
+          || (isAdmin() && existing().role in ['GM', 'MODERATOR'])
+        );
     }
 
     // Moderation & Contact Tickets (/moderation_tickets/{ticketId}) routed to creatergame31@gmail.com
     match /moderation_tickets/{ticketId} {
-      allow get: if isSignedIn() && isValidId(ticketId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(ticketId) && (existing().ownerId == request.auth.uid || isModerator());
       allow list: if isSignedIn() && (existing().ownerId == request.auth.uid || (request.auth.token.email_verified == true && request.auth.token.email == 'creatergame31@gmail.com' && existing().recipientEmail == 'creatergame31@gmail.com'));
       allow create: if isVerifiedUser()
         && isValidId(ticketId)
@@ -334,8 +378,20 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Tier 1: Admin / GM / Moderator status & reply resolution (includes terminal state override)
+          // Tier 1a: Admin / SuperAdmin resolution across all categories (including terminal RESOLVED override)
           (isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminReply', 'updatedAt']))
+          ||
+          // Tier 1b: GM resolution on non-terminal GM, MODERATOR, or CONTACT tickets
+          (isGM()
+            && existing().status != 'RESOLVED'
+            && existing().category in ['GM', 'MODERATOR', 'CONTACT']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminReply', 'updatedAt']))
+          ||
+          // Tier 1c: Moderator resolution on non-terminal MODERATOR or CONTACT tickets
+          (isModerator()
+            && existing().status != 'RESOLVED'
+            && existing().category in ['MODERATOR', 'CONTACT']
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminReply', 'updatedAt']))
           ||
           // Tier 2: Sender updating message before terminal RESOLVED state
@@ -348,9 +404,9 @@ service cloud.firestore {
         && (existing().ownerId == request.auth.uid || isAdmin());
     }
 
-    // User Content Reports (/content_reports/{reportId}) reviewed by Admins from Dashboard
+    // User Content Reports (/content_reports/{reportId}) reviewed by Staff from Dashboard
     match /content_reports/{reportId} {
-      allow get: if isSignedIn() && isValidId(reportId) && (existing().reporterId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(reportId) && (existing().reporterId == request.auth.uid || isModerator());
       allow list: if isSignedIn() && (existing().reporterId == request.auth.uid || (request.auth.token.email_verified == true && request.auth.token.email == 'creatergame31@gmail.com' && existing().assignedAdminEmail == 'creatergame31@gmail.com'));
       allow create: if isVerifiedUser()
         && isValidId(reportId)
@@ -370,8 +426,13 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Tier 1: Admin / GM / Moderator reviewing report from dashboard
+          // Tier 1a: Admin / SuperAdmin reviewing or overriding any report (including terminal ACTIONED/DISMISSED)
           (isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'severity', 'resolutionNotes', 'updatedAt']))
+          ||
+          // Tier 1b: GM / Moderator reviewing active non-terminal reports (OPEN or IN_REVIEW)
+          (isModerator()
+            && existing().status in ['OPEN', 'IN_REVIEW']
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'severity', 'resolutionNotes', 'updatedAt']))
           ||
           // Tier 2: Reporter updating details while report is still OPEN

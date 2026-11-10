@@ -269,39 +269,74 @@ export function filterGuardrails(
 export const COMPLIANCE_DOCS_CATALOG: ComplianceDocEntry[] = [
   {
     filename: 'README.md',
-    title: 'Architecture & Hardware Optimization Blueprint',
-    badge: 'SYSTEM ARCHITECTURE',
-    frameworksCovered: ['WebXR / XR Blocks v0.24', 'AES-256-GCM + AAD', 'Realme 8 5G (90Hz / 4GB RAM)', 'Firebase Firestore RBAC'],
+    title: 'Practical Setup, Testing & Architecture Guide',
+    badge: 'SETUP · TEST · ARCHITECTURE · MIT',
+    frameworksCovered: [
+      'Quick Start & .env Config',
+      'WebXR / XR Blocks v0.24',
+      'AES-256-GCM + AAD',
+      'Zero-Trust Gemini API Guard',
+      '4-Tier Firestore RBAC & AST Rules Engine',
+    ],
     summary:
-      'Master architectural overview of OmniStream XR Studio: 32K Spatial Cinema, Lumen Video Platform, YouTube Likes API v3, AES-256-GCM Vault, Realme 8 5G 90Hz Governor, and VibePitch Studio.',
-    markdownContent: `# OmniStream XR Studio — Architecture & Engineering Blueprint
+      'Step-by-step installation, .env and Firebase configuration, dev/prod server commands, 11-suite test runner (npm test), project maturity history, 4-Tier RBAC matrix, and MIT License.',
+    markdownContent: `# OmniStream XR Studio — Setup, Operations & Architecture Guide
 
-## 1. Executive Summary
-OmniStream XR Studio is a unified WebXR spatial media, bioscience visualization, AI production, and commercial agency platform built on **Vanilla TypeScript**, **Three.js (r186)**, **XR Blocks (v0.24.0)**, and **Firebase Firestore**.
+**License:** MIT (\`LICENSE\`) · **Version:** \`1.0.0\` · **Changelog:** \`CHANGELOG.md\`
 
-## 2. Core Architectural Pillars
-1. **AES-256-GCM Authenticated Encryption Engine (\`/src/services/cryptoAes256.ts\`)**:
-   - Native WebCrypto \`AES-256-GCM\` with 256-bit keys, 12-byte CSPRNG IVs, and 128-bit authentication tags.
-   - Associated Authenticated Data (\`AAD\`) binding (\`user_id:<uid>|record_id:<id>\`) to prevent cross-record ciphertext splicing.
-   - Canonical URL-safe Base64 wire format: \`[12-byte IV | 16-byte AuthTag | Ciphertext]\`.
-   - 64 KB sequential chunked streaming encryption with counter-bound AAD.
-2. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB RAM) Hardware Governor (\`/src/services/hardwareGovernor.ts\`)**:
-   - Real-time 90Hz (\`11.1ms\` budget) and 60Hz (\`16.6ms\` budget) frame pacing monitor using pre-allocated \`Float32Array\` ring buffers.
-   - Dynamic Mali-G57 MC2 GPU render scaling (\`NATIVE_1080P\` vs \`SAVER_720P_SCALE\`).
-   - 4GB LPDDR4X RAM \`availMem\` floor tracking, one-click \`performMemoryTrim()\`, and UFS 2.1 sequential async I/O queueing.
-3. **VibePitch Studio 7-Vertical Quote & Script Engine (\`/src/services/vibePitchEngine.ts\`)**:
-   - Deterministic \`InputBoundsValidator\` mirroring Firestore schema limits.
-   - 7 commercial vertical presets, 6-channel pitch script generator, and 30-day guest-to-cloud lifecycle evaluation.
-4. **Admin, GM & Moderator Governance (\`creatergame31@gmail.com\`)**:
-   - Full role-based access control (\`/admin_roles\`, \`/moderation_tickets\`, \`/content_reports\`) supervised by Primary Admin \`creatergame31@gmail.com\`.`,
+## 1. Project Maturity & Quick Start
+- **Status (\`v1.0.0\`)**: Exported as a squashed release snapshot from Google AI Studio Build with 11 automated behavioral & unit test suites (\`npm test\`), strict TypeScript linting (\`npm run lint\`), and ESLint-verified Firestore Security Rules (\`npm run lint:rules\`).
+- **Guest Mode vs. Authenticated Cloud Mode**: Works out-of-the-box in Guest Mode for local 3D WebXR, Lumen Video, Bioscience 3D, AES-256-GCM Vault, 90Hz Telemetry HUD, and VibePitch Studio; Google Sign-In unlocks cloud Firestore sync, YouTube Likes, and authenticated \`/api/gemini/*\` + \`/live\` AI endpoints.
+
+## 2. Installation, Configuration & Run Instructions
+\`\`\`bash
+# 1. Install dependencies
+npm install
+
+# 2. Configure environment variables (set GEMINI_API_KEY in .env)
+cp .env.example .env
+
+# 3. Start development server on http://localhost:3000
+npm run dev
+
+# 4. Run all 11 behavioral Firestore rules & service unit tests
+npm test
+
+# 5. Lint Firestore rules & TypeScript, and build for production
+npm run lint:rules
+npm run lint
+npm run build && npm start
+\`\`\`
+
+## 3. Seven Core Architectural Pillars
+1. **Server-Side Gemini API Security & Rate-Limiting Governor (\`/src/services/serverSecurityGuard.ts\` & \`/server.ts\`)**:
+   - Cryptographic RS256 Firebase ID Token verification on all 10 \`/api/gemini/*\` routes and \`/live\` WebSocket upgrades, per-IP and per-user sliding-window rate limits, weighted daily quotas, and sanitized \`{ error, code, requestId }\` responses.
+2. **Behavioral Firestore Security Rules Execution Engine, Dirty Dozen Suite & 4-Tier RBAC (\`/firestore.rules\`, \`/src/services/firestoreRulesHarness.ts\`, \`/firestore.rules.test.ts\`)**:
+   - Compiles \`/firestore.rules\` into an executable ANTLR4 AST and evaluates live CRUD requests with \`@firebase/rules-unit-testing\`'s \`assertSucceeds()\` and \`assertFails()\`.
+   - Enforces a role-verified 4-tier RBAC hierarchy (\`SUPER_ADMIN\` > \`ADMIN\` > \`GM\` > \`MODERATOR\`) via \`hasStaffRole(allowedRoles)\`.
+3. **AES-256-GCM Authenticated Encryption Engine (\`/src/services/cryptoAes256.ts\`)**:
+   - Native WebCrypto \`AES-256-GCM\` with 256-bit keys, 12-byte CSPRNG IVs, 128-bit auth tags, \`AAD\` binding (\`user_id:<uid>|record_id:<id>\`), and 64 KB chunked streaming.
+4. **Realme 8 5G (Dimensity 700 / 90Hz / 4GB RAM) Hardware Governor (\`/src/services/hardwareGovernor.ts\`)**:
+   - Real-time 90Hz (\`11.1ms\`) and 60Hz (\`16.6ms\`) frame pacing monitor, \`SAVER_720P_SCALE\` GPU downscaling, and 4GB LPDDR4X RAM floor trim.
+5. **VibePitch Studio 7-Vertical Quote & Script Engine (\`/src/services/vibePitchEngine.ts\`)**:
+   - Deterministic \`InputBoundsValidator\`, 7 commercial vertical presets, 6-channel pitch script generator, and 30-day guest-to-cloud lifecycle evaluation.
+6. **Spatial WebXR 32K Cinema, Lumen Video & YouTube Data API v3 (\`/src/scene/SpatialStudio.ts\`, \`/src/ui/LumenView.ts\`)**:
+   - 8-part composite 3D Broadcast Rig, 36-node \`InstancedMesh\` CDN ring, AlphaFold pLDDT 3D molecular viewer, Lumen Video Platform, and OAuth 2.0 YouTube Likes manager.
+7. **Admin, GM & Moderator Governance (\`creatergame31@gmail.com\`)**:
+   - Full role-based access control (\`/admins\`, \`/moderation_tickets\`, \`/content_reports\`) supervised by Primary Admin \`creatergame31@gmail.com\`.`,
   },
   {
     filename: 'SECURITY.md',
-    title: 'Cryptographic & RBAC Security Specification',
-    badge: 'AES-256-GCM · OWASP',
-    frameworksCovered: ['NIST SP 800-38D (AES-GCM)', 'OWASP Top 10', 'Firestore RBAC', 'Zero-Trust OAuth'],
+    title: 'Cryptographic, API Quota & 4-Tier RBAC Security Specification',
+    badge: 'AES-256-GCM · RS256 JWT · 4-TIER RBAC',
+    frameworksCovered: [
+      'NIST SP 800-38D (AES-GCM)',
+      'RS256 Firebase JWT Verification',
+      '4-Tier Firestore RBAC & AST Engine',
+      'OWASP Top 10 & Error Sanitization',
+    ],
     summary:
-      'Defines the AES-256-GCM cryptographic envelope, 12-byte CSPRNG nonce discipline, AAD context binding, Firestore security rules, and vulnerability reporting to creatergame31@gmail.com.',
+      'Defines the AES-256-GCM cryptographic envelope, AAD binding, RS256 Firebase ID token authentication on /api/gemini/* and /live, 4-tier Firestore RBAC (SUPER_ADMIN > ADMIN > GM > MODERATOR), and behavioral AST verification.',
     markdownContent: `# Security Policy & Cryptographic Specification (SECURITY.md)
 
 ## 1. Authenticated Encryption Standard (NIST SP 800-38D)
@@ -312,13 +347,18 @@ OmniStream XR Studio is a unified WebXR spatial media, bioscience visualization,
 - **Packed Wire Layout**: \`[12-byte IV | 16-byte AuthTag | Ciphertext]\` encoded in URL-safe Base64 (\`-\` and \`_\`, no padding \`=\`).
 - **Associated Authenticated Data (AAD)**: Every ciphertext is cryptographically bound to \`user_id:<uid>|record_id:<id>\`. Modifying the AAD or transplanting ciphertext to another record triggers an immediate \`AEADBadTagException\`.
 
-## 2. OAuth 2.0 & Secret Hygiene
-- Google Workspace and YouTube Data API v3 OAuth 2.0 access tokens are cached strictly in volatile memory (\`cachedAccessToken\`) and never written to \`localStorage\` or \`sessionStorage\`.
-- Server-side Gemini API keys are accessed exclusively on the Express backend via \`process.env.GEMINI_API_KEY\`.
+## 2. Server-Side Gemini API Authentication, Rate Limiting & Quota Protection (\`/src/services/serverSecurityGuard.ts\`)
+- **Mandatory Firebase ID Token Verification**: All \`/api/gemini/*\` endpoints and the \`/live\` WebSocket upgrade verify \`RS256\` Firebase ID tokens against Google's \`securetoken@system.gserviceaccount.com\` X.509 certificates (\`401 Unauthorized\` when missing or invalid).
+- **Sliding-Window Rate Limiting & Weighted Quotas**: Per-IP (\`30 req/min\`) and per-user/per-endpoint rate limits (\`2 req/min\` video, \`4 req/min\` image/music, \`6–15 req/min\` speech/vision/chat) plus weighted daily quotas (\`250 units/day\` user, \`1,000 units/day\` admin, \`5,000 units/day\` global) and \`/live\` WebSocket concurrency caps (\`1\` session/user).
+- **Error Sanitization & Log Redaction**: Raw \`error.message\` and stack traces are never returned to clients; responses use safe \`{ error, code, requestId }\` envelopes and server logs redact keys/tokens.
 
-## 3. Role-Based Access Control & Reporting
-- Primary Administration, Game Master (GM), and Moderator authority is bound to \`creatergame31@gmail.com\`.
-- Security disclosures and content reports may be submitted directly via the in-app **Report Content** modal (\`/content_reports\`) or dispatched to \`creatergame31@gmail.com\`.`,
+## 3. 4-Tier Role-Based Access Control & Behavioral Firestore Rules Verification (\`/firestore.rules\` & \`/firestore.rules.test.ts\`)
+- **Role-Verified Staff Lookup (\`hasStaffRole(allowedRoles)\`)**: Validates \`exists(/databases/$(database)/documents/admins/$(request.auth.uid))\`, \`get(...).data.targetUid == request.auth.uid\`, and \`get(...).data.role in allowedRoles\` across 4 least-privilege tiers (\`isSuperAdmin()\`, \`isAdmin()\`, \`isGM()\`, \`isModerator()\`).
+- **Executable AST Rule Evaluation**: Compiles \`/firestore.rules\` with \`@firebase/eslint-plugin-security-rules/parser\` and verifies real CRUD operations across all 12 Dirty Dozen payloads, all 7 collections, and all 4 staff tiers using \`@firebase/rules-unit-testing\`'s \`assertSucceeds()\` and \`assertFails()\`.
+
+## 4. OAuth 2.0 & Secret Hygiene
+- Google Workspace and YouTube Data API v3 OAuth 2.0 access tokens are cached strictly in volatile memory (\`cachedAccessToken\`) and never written to \`localStorage\` or \`sessionStorage\`.
+- Server-side Gemini API keys are accessed exclusively on the Express backend via \`process.env.GEMINI_API_KEY\`.`,
   },
   {
     filename: 'PRIVACY.md',
@@ -366,18 +406,22 @@ Users may flag policy violations using the **Report Content** workflow (\`/conte
   },
   {
     filename: 'ACCOUNT.md',
-    title: 'Account Lifecycle, RBAC & Data Deletion Guide',
-    badge: 'AUTH · RBAC · DELETION',
-    frameworksCovered: ['Firebase Auth (Google OAuth)', '30-Day Guest Migration', 'Right to Erasure Workflow'],
+    title: 'Account Lifecycle, 4-Tier RBAC & Data Deletion Guide',
+    badge: 'AUTH · 4-TIER RBAC · DELETION',
+    frameworksCovered: ['Firebase Auth (Google OAuth)', '4-Tier Staff Hierarchy', 'Right to Erasure Workflow'],
     summary:
-      'Documents guest vs. authenticated states, admin/GM/moderator role hierarchy, in-memory token lifecycle, and instant data deletion.',
+      'Documents guest vs. authenticated states, the 4-tier staff role hierarchy (SUPER_ADMIN > ADMIN > GM > MODERATOR), in-memory token lifecycle, and instant data deletion.',
     markdownContent: `# Account Lifecycle & Data Governance (ACCOUNT.md)
 
-## 1. Account Tiers & Role Hierarchy
+## 1. Account Tiers & 4-Tier Staff Role Hierarchy
 1. **Guest Explorer (Days 1–30)**: Local-first evaluation with deterministic seed data and local persistence.
-2. **Authenticated Creator (Google Sign-In)**: Cloud-synced playlists, comments, YouTube Likes management, and Workspace connectors.
-3. **Staff Roles (\`/admin_roles\`)**: \`MODERATOR\`, \`ADMIN\`, \`GM\` (Game Master), and \`SUPER_ADMIN\`.
-4. **Primary Master Authority**: \`creatergame31@gmail.com\` holds permanent \`SUPER_ADMIN\`, \`GM\`, \`ADMIN\`, and \`MODERATOR\` privileges.
+2. **Authenticated Creator (Google Sign-In)**: Cloud-synced playlists, comments, YouTube Likes management, authenticated Gemini Studio API access, and Workspace connectors.
+3. **4-Tier Staff Hierarchy (\`/admins/{uid}\` enforced via \`hasStaffRole(allowedRoles)\`)**:
+   - **\`MODERATOR\` (\`isModerator()\`)**: Restricts video \`ageRating\`, deletes abusive comments, reviews active content reports, and resolves \`MODERATOR\`/\`CONTACT\` tickets.
+   - **\`GM\` (\`isGM()\`)**: Includes \`MODERATOR\` permissions plus updating full video metadata and resolving \`GM\` category tickets.
+   - **\`ADMIN\` (\`isAdmin()\`)**: Includes \`GM\` permissions plus managing subordinate roles (\`GM\`, \`MODERATOR\`), deleting videos/tickets/reports, resolving \`ADMIN\` tickets, and overriding terminal states.
+   - **\`SUPER_ADMIN\` (\`isSuperAdmin()\`)**: Full administrative authority across all collections and all 4 staff role tiers.
+4. **Primary Master Authority**: \`creatergame31@gmail.com\` holds permanent \`SUPER_ADMIN\`, \`ADMIN\`, \`GM\`, and \`MODERATOR\` privileges.
 
 ## 2. Session & Token Security
 - Signing out via the top-bar **Sign Out** button immediately detaches all active Firestore real-time listeners (\`unsubscribeComments\`, \`unsubscribeContentReports\`), clears the in-memory YouTube OAuth token cache, and resets session state.
@@ -389,9 +433,9 @@ Users may flag policy violations using the **Report Content** workflow (\`/conte
     filename: 'CONTRIBUTING.md',
     title: 'Engineering Standards & 100 Guardrails Workflow',
     badge: '100 GUARDRAILS · QA',
-    frameworksCovered: ['Vanilla TypeScript (.ts)', 'XR Blocks v0.24', 'node:test + tsx', '90Hz Performance Budget'],
+    frameworksCovered: ['Vanilla TypeScript (.ts)', 'XR Blocks v0.24', 'Behavioral Rules AST Tests', '90Hz Performance Budget'],
     summary:
-      'Developer handbook enforcing Vanilla TypeScript modularity, InputBoundsValidator parity, 90Hz frame budgets, and mandatory unit + browser verification.',
+      'Developer handbook enforcing Vanilla TypeScript modularity, InputBoundsValidator parity, behavioral 4-tier RBAC Firestore rules testing, 90Hz frame budgets, and mandatory verification.',
     markdownContent: `# Contributing & Engineering Standards (CONTRIBUTING.md)
 
 ## 1. Framework & Language Constraints
@@ -399,14 +443,15 @@ Users may flag policy violations using the **Report Content** workflow (\`/conte
 - **XR Blocks Architecture**: 3D scene scripts extend \`xb.Script\` (\`/src/scene/SpatialStudio.ts\`).
 - **Modular Services**: Place pure domain logic in \`/src/services/*.ts\` and UI views in \`/src/ui/*.ts\`.
 
-## 2. Hardware & Cryptographic Guardrails
+## 2. Hardware, Cryptographic & Security Rules Guardrails
 - **90Hz Frame Pacing**: Never allocate temporary \`THREE.Vector3\` / \`THREE.Matrix4\` objects inside \`update()\`; use module-scope scratch objects and ring buffers.
 - **AES-256-GCM Discipline**: All sensitive payloads must use \`encryptAes256GcmWithAad()\` with a unique 12-byte IV and mandatory \`AAD\` context string.
-- **Schema Parity**: Every client form mutation must pass through \`InputBoundsValidator\` before calling Firestore.
+- **Behavioral Rules & 4-Tier RBAC Verification**: Never test \`firestore.rules\` with regex string checks; all rule changes must be verified against the ANTLR4 AST execution harness in \`/firestore.rules.test.ts\` using \`assertSucceeds\` and \`assertFails\` across all 4 staff tiers (\`SUPER_ADMIN\`, \`ADMIN\`, \`GM\`, \`MODERATOR\`).
 
 ## 3. Verification Checklist Before Merge
-1. Run unit tests: \`npx --yes tsx --test src/services/suite.test.ts\`
-2. Run TypeScript build & linter: \`npm run build\` and \`npm run lint\`.`,
+1. Run all 11 behavioral Firestore rules & service unit tests: \`npm test\`
+2. Lint Firestore Security Rules: \`npm run lint:rules\`
+3. Run TypeScript build & linter: \`npm run build\` and \`npm run lint\`.`,
   },
   {
     filename: 'CODE_OF_CONDUCT.md',
@@ -430,11 +475,17 @@ We are committed to providing a harassment-free, inclusive, and high-integrity s
   },
   {
     filename: 'ROADMAP.md',
-    title: 'Product & Engineering Roadmap (Phases 1–4)',
+    title: 'Product & Engineering Roadmap (Phases 1–5)',
     badge: 'MILESTONES COMPLETE',
-    frameworksCovered: ['Phase 1: Core XR & YouTube API', 'Phase 2: AES-256-GCM & RBAC', 'Phase 3: 90Hz Realme 8 5G Governor', 'Phase 4: VibePitch & 100 Guardrails'],
+    frameworksCovered: [
+      'Phase 1: Core XR & YouTube API',
+      'Phase 2: AES-256-GCM & RBAC',
+      'Phase 3: 90Hz Realme 8 5G Governor',
+      'Phase 4: VibePitch & 100 Guardrails',
+      'Phase 5: Zero-Trust API & 4-Tier RBAC',
+    ],
     summary:
-      'Tracks completed engineering milestones across Spatial WebXR, YouTube Data API v3, AES-256-GCM encryption, Realme 8 5G 90Hz optimization, and VibePitch Studio.',
+      'Tracks completed engineering milestones across Spatial WebXR, YouTube Data API v3, AES-256-GCM encryption, Realme 8 5G 90Hz optimization, VibePitch Studio, Zero-Trust Gemini API Rate-Limiting, and 4-Tier Behavioral Firestore Rules Verification.',
     markdownContent: `# OmniStream XR Studio — Product & Engineering Roadmap (ROADMAP.md)
 
 ## Phase 1: Spatial WebXR Core, Lumen Video & YouTube Data API v3 [COMPLETED]
@@ -451,6 +502,10 @@ We are committed to providing a harassment-free, inclusive, and high-integrity s
 
 ## Phase 4: VibePitch Studio, 100 Guardrails & 8-Doc Compliance Hub [COMPLETED]
 - 7-Niche Quote Calculator, \`InputBoundsValidator\`, 6-Channel Pitch Script Generator, and 30-Day Guest-to-Cloud Lifecycle.
-- Full 100 Vibe Coding Agent Guardrails Inspector and 8-Document Global Compliance Hub.`,
+- Full 100 Vibe Coding Agent Guardrails Inspector and 8-Document Global Compliance Hub.
+
+## Phase 5: Zero-Trust Gemini API Security Governor, 4-Tier RBAC & Behavioral Firestore Rules Verification [COMPLETED]
+- RS256 Firebase ID Token verification across all 10 \`/api/gemini/*\` endpoints and \`/live\` WebSocket upgrades, sliding-window rate limiters, weighted daily quotas, and sanitized error envelopes.
+- Role-verified 4-tier Firestore RBAC hierarchy (\`SUPER_ADMIN\` > \`ADMIN\` > \`GM\` > \`MODERATOR\` via \`hasStaffRole(allowedRoles)\`) and Behavioral Firestore Security Rules Execution Engine (\`/src/services/firestoreRulesHarness.ts\` & \`/firestore.rules.test.ts\`, \`11 pass, 0 fail\`).`,
   },
 ];

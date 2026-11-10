@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   buildCanonicalAadContext,
@@ -34,6 +35,15 @@ import {
   COMPLIANCE_DOCS_CATALOG,
   filterGuardrails,
 } from './complianceAndGuardrails';
+
+import {
+  extractBearerOrQueryToken,
+  verifyFirebaseIdToken,
+  GeminiApiSecurityGovernor,
+  sanitizeServerError,
+  redactSensitiveErrorDetails,
+  clampPromptText,
+} from './serverSecurityGuard';
 
 test('AES-256-GCM + AAD encrypts and decrypts with unique 12B IV and rejects tampered AAD', async () => {
   const aad = buildCanonicalAadContext('creatergame31@gmail.com', 'vault_rec_01');
@@ -204,3 +214,202 @@ test('100 Vibe Coding Agent Guardrails and 8 Compliance Documents completeness',
     'ROADMAP.md',
   ]);
 });
+
+test('serverSecurityGuard: RS256 Firebase JWT verification, audience/issuer/expiry checks, and token extraction', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  const projectId = 'gen-lang-client-0029274497';
+  const nowSec = 1_750_000_000;
+
+  const signJwt = (header: Record<string, unknown>, payload: Record<string, unknown>) => {
+    const h = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const p = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(`${h}.${p}`);
+    signer.end();
+    const sig = signer.sign(privateKey).toString('base64url');
+    return `${h}.${p}.${sig}`;
+  };
+
+  const validToken = signJwt(
+    { alg: 'RS256', kid: 'key_2026_1' },
+    {
+      iss: `https://securetoken.google.com/${projectId}`,
+      aud: projectId,
+      sub: 'uid_creator_31',
+      email: 'creatergame31@gmail.com',
+      iat: nowSec - 60,
+      exp: nowSec + 3600,
+    }
+  );
+
+  // Extract from Authorization header or WebSocket URL query `?token=...`
+  assert.equal(extractBearerOrQueryToken(`Bearer ${validToken}`, undefined), validToken);
+  assert.equal(extractBearerOrQueryToken(undefined, `/live?token=${encodeURIComponent(validToken)}`), validToken);
+  assert.equal(extractBearerOrQueryToken('Basic abc', undefined), null);
+
+  // Valid token passes cryptographic verification and detects admin role
+  const verified = await verifyFirebaseIdToken(
+    validToken,
+    projectId,
+    'creatergame31@gmail.com',
+    { key_2026_1: publicKey },
+    nowSec
+  );
+  assert.notEqual(verified, null);
+  assert.equal(verified?.uid, 'uid_creator_31');
+  assert.equal(verified?.email, 'creatergame31@gmail.com');
+  assert.equal(verified?.isAdmin, true);
+
+  // Missing/empty token rejected (returns null)
+  const missing = await verifyFirebaseIdToken(
+    '',
+    projectId,
+    'creatergame31@gmail.com',
+    { key_2026_1: publicKey },
+    nowSec
+  );
+  assert.equal(missing, null);
+
+  // Expired token rejected
+  const expired = await verifyFirebaseIdToken(
+    validToken,
+    projectId,
+    'creatergame31@gmail.com',
+    { key_2026_1: publicKey },
+    nowSec + 7200
+  );
+  assert.equal(expired, null);
+
+  // Wrong audience rejected
+  const wrongAud = await verifyFirebaseIdToken(
+    validToken,
+    'another-project-id',
+    'creatergame31@gmail.com',
+    { key_2026_1: publicKey },
+    nowSec
+  );
+  assert.equal(wrongAud, null);
+
+  // Tampered payload fails RSA signature verification
+  const parts = validToken.split('.');
+  const tamperedPayload = Buffer.from(
+    JSON.stringify({
+      iss: `https://securetoken.google.com/${projectId}`,
+      aud: projectId,
+      sub: 'attacker_uid',
+      iat: nowSec - 60,
+      exp: nowSec + 3600,
+    })
+  ).toString('base64url');
+  const forgedToken = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
+  const forgedRes = await verifyFirebaseIdToken(
+    forgedToken,
+    projectId,
+    'creatergame31@gmail.com',
+    { key_2026_1: publicKey },
+    nowSec
+  );
+  assert.equal(forgedRes, null);
+});
+
+test('serverSecurityGuard: rate limiting, weighted daily quotas, WebSocket concurrency, and error sanitization', () => {
+  const gov = new GeminiApiSecurityGovernor({
+    windowMs: 60_000,
+    maxIpRequestsPerWindow: 20,
+    defaultUserDailyQuotaUnits: 50,
+    adminUserDailyQuotaUnits: 200,
+    globalDailyQuotaUnits: 100,
+    maxConcurrentLiveSessionsPerUser: 1,
+    maxGlobalConcurrentLiveSessions: 2,
+  });
+
+  const now = 1_750_000_000_000;
+  const userIdentity = { uid: 'user_1', email: 'viewer@example.com', isAdmin: false };
+
+  // Unauthenticated request rejected with 401
+  const unauth = gov.checkAndConsumeQuota({
+    ip: '203.0.113.10',
+    endpoint: '/api/gemini/chat',
+    identity: null,
+    nowMs: now,
+  });
+  assert.equal(unauth.allowed, false);
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.errorCode, 'UNAUTHENTICATED');
+
+  // Costly endpoint (/api/gemini/generate-video has maxRequestsPerMinute=2, costUnits=25)
+  const r1 = gov.checkAndConsumeQuota({
+    ip: '203.0.113.10',
+    endpoint: '/api/gemini/generate-video',
+    identity: userIdentity,
+    nowMs: now + 100,
+  });
+  assert.equal(r1.allowed, true);
+  assert.equal(r1.remainingDailyQuotaUnits, 25);
+
+  const r2 = gov.checkAndConsumeQuota({
+    ip: '203.0.113.10',
+    endpoint: '/api/gemini/generate-video',
+    identity: userIdentity,
+    nowMs: now + 1000,
+  });
+  assert.equal(r2.allowed, true);
+  assert.equal(r2.remainingDailyQuotaUnits, 0);
+
+  // 3rd video generation in same 1-min window hits endpoint rate limit (429)
+  const r3 = gov.checkAndConsumeQuota({
+    ip: '203.0.113.10',
+    endpoint: '/api/gemini/generate-video',
+    identity: userIdentity,
+    nowMs: now + 2000,
+  });
+  assert.equal(r3.allowed, false);
+  assert.equal(r3.statusCode, 429);
+  assert.equal(r3.errorCode, 'USER_ENDPOINT_RATE_LIMIT');
+
+  // Even on another endpoint ('/api/gemini/chat'), user_1's daily quota (50 units) is now exhausted
+  const r4 = gov.checkAndConsumeQuota({
+    ip: '203.0.113.10',
+    endpoint: '/api/gemini/chat',
+    identity: userIdentity,
+    nowMs: now + 3000,
+  });
+  assert.equal(r4.allowed, false);
+  assert.equal(r4.statusCode, 429);
+  assert.equal(r4.errorCode, 'DAILY_QUOTA_EXCEEDED');
+
+  // Live WebSocket concurrency slots
+  const ws1 = gov.acquireLiveWebSocketSlot('user_2');
+  assert.equal(ws1.allowed, true);
+  // Second concurrent connection for same user rejected
+  const ws2 = gov.acquireLiveWebSocketSlot('user_2');
+  assert.equal(ws2.allowed, false);
+
+  // Releasing slot allows reconnecting
+  gov.releaseLiveWebSocketSlot('user_2');
+  const ws3 = gov.acquireLiveWebSocketSlot('user_2');
+  assert.equal(ws3.allowed, true);
+  gov.releaseLiveWebSocketSlot('user_2');
+
+  // Error sanitization never leaks raw internal error message or API keys
+  const internalErr = new Error(
+    'GoogleGenAIError: failed request with key AIzaSyD1234567890abcdefghijklmnop and stack trace at /app/server.ts:95'
+  );
+  const sanitized = sanitizeServerError(internalErr, 'CHAT_ERROR');
+  assert.equal(sanitized.code, 'CHAT_ERROR');
+  assert.equal(sanitized.error.includes('AIzaSy'), false);
+  assert.equal(sanitized.error.includes('/app/server.ts'), false);
+  assert.equal(sanitized.requestId.startsWith('req_'), true);
+
+  const redactedLog = redactSensitiveErrorDetails(internalErr.message);
+  assert.equal(redactedLog.includes('AIzaSyD1234567890'), false);
+  assert.equal(redactedLog.includes('[REDACTED_GOOGLE_API_KEY]'), true);
+
+  assert.equal(clampPromptText('A'.repeat(5000), 'fallback', 100).length, 100);
+});
+

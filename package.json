@@ -1,7 +1,9 @@
 {
-  "name": "xrblocks-example",
+  "name": "omnistream-xr-studio",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "WebXR 32K spatial media studio, Lumen video platform, bioscience molecular viewer, and Gemini AI suite built with XR Blocks, Three.js, Express, and Firebase Firestore.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -9,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "lint:rules": "eslint firestore.rules",
+    "test": "tsx --test firestore.rules.test.ts src/services/suite.test.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-simd-compat": "^0.19.3",
@@ -36,6 +40,7 @@
   },
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@types/dom-speech-recognition": "^0.0.7",
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.8",

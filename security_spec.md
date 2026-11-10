@@ -3,21 +3,33 @@
 ## 1. Data Invariants & Master Sources of Truth
 1. **Default Deny**: All unspecified paths (`/{document=**}`) deny all reads and writes.
 2. **Verified Identity**: All writes (`create`, `update`, `delete`) require `request.auth != null && request.auth.token.email_verified == true`.
-3. **Bootstrapped Super-Admin / GM / Moderator Authority (`creatergame31@gmail.com`)**:
-   - `isAdmin()` is true ONLY if `isVerifiedUser()` is true AND (`request.auth.token.email == 'creatergame31@gmail.com'` OR `exists(/databases/$(database)/documents/admins/$(request.auth.uid))`).
-   - Unverified email tokens spoofing `creatergame31@gmail.com` (`email_verified == false`) are rejected.
+3. **4-Tier Role-Based Access Control (RBAC) Hierarchy (`SUPER_ADMIN` > `ADMIN` > `GM` > `MODERATOR`)**:
+   - Every `/admins/{uid}` role check (`hasStaffRole(allowedRoles)`) verifies **both** document existence (`exists(...)`), identity binding (`get(...).data.targetUid == request.auth.uid`), **and** explicit `role` membership (`get(...).data.role in allowedRoles`). Merely having a document in `/admins/{uid}` never grants blanket admin status.
+   - **Tier 1 — `isSuperAdmin()`** (`creatergame31@gmail.com` with `email_verified == true`, or `/admins/{uid}` with `role == 'SUPER_ADMIN'`):
+     - Full authority over `/admins/{adminId}` (can create, update, and delete any staff tier: `SUPER_ADMIN`, `ADMIN`, `GM`, `MODERATOR`) plus all `ADMIN`, `GM`, and `MODERATOR` permissions.
+   - **Tier 2 — `isAdmin()`** (`isSuperAdmin()` or `/admins/{uid}` with `role == 'ADMIN'`):
+     - Can create, update, and delete **subordinate** staff roles (`GM`, `MODERATOR`) in `/admins/{adminId}`, but **cannot** create, modify, or delete `SUPER_ADMIN` or `ADMIN` documents (preventing horizontal or vertical privilege escalation).
+     - Can delete `/videos/{videoId}`, `/moderation_tickets/{ticketId}`, and `/content_reports/{reportId}`, edit comments, resolve `'ADMIN'` category tickets, and override terminal states (`RESOLVED`, `ACTIONED`, `DISMISSED`).
+   - **Tier 3 — `isGM()`** (`isAdmin()` or `/admins/{uid}` with `role == 'GM'`):
+     - **Cannot** create, update, or delete `/admins/{adminId}` documents or read other staff members' `/admins` docs.
+     - **Cannot** delete `/videos`, `/moderation_tickets`, or `/content_reports`.
+     - **Can** update full video metadata (`title`, `description`, `category`, `resolution`, `ageRating`), delete abusive comments, review non-terminal `/content_reports` (`OPEN`, `IN_REVIEW`), and resolve non-terminal `/moderation_tickets` in `GM`, `MODERATOR`, or `CONTACT` categories (cannot resolve `ADMIN` category tickets).
+   - **Tier 4 — `isModerator()`** (`isGM()` or `/admins/{uid}` with `role == 'MODERATOR'`):
+     - **Cannot** create, update, or delete `/admins/{adminId}` documents.
+     - **Cannot** delete `/videos`, `/moderation_tickets`, or `/content_reports`, and **cannot** edit video `title`/`description`/`category`/`resolution` or comment `text`.
+     - **Can** restrict video `ageRating` (`['ageRating', 'updatedAt']`), delete abusive comments, review non-terminal `/content_reports` (`OPEN`, `IN_REVIEW`), and resolve non-terminal `/moderation_tickets` in `MODERATOR` or `CONTACT` categories (cannot resolve `ADMIN` or `GM` category tickets).
 4. **Master Gate Relational Sync**:
    - `/videos/{videoId}/comments/{commentId}` requires `exists(/databases/$(database)/documents/videos/$(videoId))` on create and update.
 5. **PII & Profile Isolation**:
    - `/users/{userId}` is strictly isolated to `userId == request.auth.uid && existing().ownerId == request.auth.uid`.
 6. **Terminal State Locking**:
-   - `/moderation_tickets/{ticketId}` locks non-admin updates once `existing().status == 'RESOLVED'`, while retaining an `isAdmin()` override so `creatergame31@gmail.com` can reopen or amend tickets.
-   - `/content_reports/{reportId}` allows reporters to create `OPEN` reports with empty `resolutionNotes` and only update `details` while `existing().status == 'OPEN'`, whereas admins (`isAdmin()`) can review, update `status` (`OPEN`, `IN_REVIEW`, `ACTIONED`, `DISMISSED`), `severity`, and `resolutionNotes`.
+   - `/moderation_tickets/{ticketId}` locks non-admin updates once `existing().status == 'RESOLVED'`, while retaining an `isAdmin()` (`SUPER_ADMIN` / `ADMIN`) override to reopen or amend tickets.
+   - `/content_reports/{reportId}` locks non-admin updates once `existing().status` reaches `'ACTIONED'` or `'DISMISSED'`, while retaining an `isAdmin()` (`SUPER_ADMIN` / `ADMIN`) override.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **Shadow Field Injection on Video**: Adding `"isFeatured": true` to `/videos/vid_1` -> `PERMISSION_DENIED` (`hasOnly` check).
 2. **Email Spoofing Attack on Admin**: `email: "creatergame31@gmail.com"` with `email_verified: false` attempting to create `/admins/uid_2` -> `PERMISSION_DENIED` (`isVerifiedUser()` check).
-3. **Self-Assigned Admin Privilege**: Regular user `uid_regular` attempting to write `/admins/uid_regular` -> `PERMISSION_DENIED` (`isAdmin()` check).
+3. **Self-Assigned Admin Privilege & Vertical Role Escalation**: Regular user `uid_regular` or `MODERATOR` / `GM` / `ADMIN` attempting to grant `SUPER_ADMIN` in `/admins/{uid}` -> `PERMISSION_DENIED` (`isSuperAdmin()` / `hasStaffRole` check).
 4. **Orphaned Comment Creation**: Creating `/videos/non_existent_vid/comments/cmt_1` -> `PERMISSION_DENIED` (`exists()` Master Gate check).
 5. **Identity Spoofing on Video Create**: User `uid_a` setting `ownerId: "uid_b"` -> `PERMISSION_DENIED`.
 6. **Cross-User Profile Read (PII Blanket Test)**: User `uid_a` reading `/users/uid_b` -> `PERMISSION_DENIED`.
@@ -25,5 +37,5 @@
 8. **ID Poisoning Attack**: Document ID containing spaces or `$` (`/videos/bad$id`) -> `PERMISSION_DENIED` (`isValidId()` regex guard).
 9. **Immutable Field Tampering**: Updating `ownerId` or `createdAt` on `/videos/vid_1` -> `PERMISSION_DENIED`.
 10. **View Counter Manipulation**: Incrementing `views` by +1000 in a single update -> `PERMISSION_DENIED` (`incoming().views == existing().views + 1`).
-11. **Terminal State Bypass on Moderation Ticket / Content Report**: Regular user updating `status` or `resolutionNotes` on `/content_reports/rep_1` -> `PERMISSION_DENIED`.
+11. **Terminal State Bypass & Role Scope Violation on Moderation Ticket / Content Report**: Regular user or lower-tier staff (`MODERATOR`/`GM`) mutating terminal `RESOLVED`/`ACTIONED` records or out-of-tier ticket categories -> `PERMISSION_DENIED`.
 12. **Client Timestamp Forgery**: Supplying a past/future `createdAt` instead of `request.time` -> `PERMISSION_DENIED`.

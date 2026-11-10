@@ -2495,15 +2495,10 @@ export class AppShell {
       this.aiStatusMessage = 'Synthesizing speech via gemini-3.8-flash-tts...';
       this.render();
       try {
-        const res = await fetch('/api/gemini/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            secondSpeakerText: 'Indeed, |yeah| spatial streaming has never been faster!',
-          }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/tts', {
+          text,
+          secondSpeakerText: 'Indeed, |yeah| spatial streaming has never been faster!',
         });
-        const data = await res.json();
         if (data.audioDataUrl) {
           this.generatedTtsUrl = data.audioDataUrl;
           this.aiStatusMessage = 'TTS audio generated.';
@@ -2524,19 +2519,14 @@ export class AppShell {
       this.aiStatusMessage = `Generating ${imageSize} (${aspectRatio}) image with ${model}...`;
       this.render();
       try {
-        const res = await fetch('/api/gemini/generate-image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            model,
-            imageSize,
-            aspectRatio,
-            base64ImageData: this.uploadedMediaBase64 || undefined,
-            mimeType: this.uploadedMediaMime,
-          }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/generate-image', {
+          prompt,
+          model,
+          imageSize,
+          aspectRatio,
+          base64ImageData: this.uploadedMediaBase64 || undefined,
+          mimeType: this.uploadedMediaMime,
         });
-        const data = await res.json();
         if (data.imageUrl) {
           this.generatedImageUrl = data.imageUrl;
           this.aiStatusMessage = `Generated ${imageSize} image (${aspectRatio}).`;
@@ -2555,17 +2545,12 @@ export class AppShell {
       this.aiStatusMessage = `Generating ${aspectRatio} video via gemini-omni-1.1-flash...`;
       this.render();
       try {
-        const res = await fetch('/api/gemini/generate-video', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            aspectRatio,
-            base64ImageBytes: this.uploadedMediaBase64 || undefined,
-            mimeType: this.uploadedMediaMime,
-          }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/generate-video', {
+          prompt,
+          aspectRatio,
+          base64ImageBytes: this.uploadedMediaBase64 || undefined,
+          mimeType: this.uploadedMediaMime,
         });
-        const data = await res.json();
         if (data.videoDataUrl) {
           this.generatedVideoUrl = data.videoDataUrl;
           this.aiStatusMessage = `Generated ${aspectRatio} video!`;
@@ -2584,12 +2569,10 @@ export class AppShell {
       this.aiStatusMessage = `Generating soundtrack via ${model}...`;
       this.render();
       try {
-        const res = await fetch('/api/gemini/generate-music', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, model }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/generate-music', {
+          prompt,
+          model,
         });
-        const data = await res.json();
         if (data.audioDataUrl) {
           this.generatedMusicUrl = data.audioDataUrl;
           this.generatedMusicLyrics = data.lyrics || '';
@@ -2614,17 +2597,12 @@ export class AppShell {
       this.chatHistory.push({ role: 'user', text: msg });
       this.render();
       try {
-        const res = await fetch('/api/gemini/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: msg,
-            history: prevHistory,
-            model,
-            highThinking,
-          }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/chat', {
+          message: msg,
+          history: prevHistory,
+          model,
+          highThinking,
         });
-        const data = await res.json();
         this.chatHistory.push({
           role: 'model',
           text: data.text || data.error || 'No response',
@@ -2643,17 +2621,12 @@ export class AppShell {
       this.chatHistory.push({ role: 'user', text: `[Analyze Media with Gemini 4 Argon]: ${prompt}` });
       this.render();
       try {
-        const res = await fetch('/api/gemini/analyze-media', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            base64Data: this.uploadedMediaBase64 || undefined,
-            mimeType: this.uploadedMediaMime,
-            highThinking: true,
-          }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/analyze-media', {
+          prompt,
+          base64Data: this.uploadedMediaBase64 || undefined,
+          mimeType: this.uploadedMediaMime,
+          highThinking: true,
         });
-        const data = await res.json();
         this.chatHistory.push({
           role: 'model',
           text: data.text || data.error || 'Analysis complete.',
@@ -2670,12 +2643,7 @@ export class AppShell {
       this.groundingLinks = [];
       this.render();
       try {
-        const res = await fetch('/api/gemini/search-grounding', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
-        const data = await res.json();
+        const data = await this.postAuthenticatedGemini('/api/gemini/search-grounding', { query });
         this.groundingOutput = data.text || data.error || '';
         this.groundingLinks = (data.groundingChunks || [])
           .map((c: Record<string, any>) => c.web)
@@ -2692,12 +2660,7 @@ export class AppShell {
       this.groundingLinks = [];
       this.render();
       try {
-        const res = await fetch('/api/gemini/maps-grounding', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        });
-        const data = await res.json();
+        const data = await this.postAuthenticatedGemini('/api/gemini/maps-grounding', { query });
         this.groundingOutput = data.text || data.error || '';
         const links: Array<{ title: string; uri: string }> = [];
         for (const chunk of data.groundingChunks || []) {
@@ -2722,12 +2685,9 @@ export class AppShell {
       this.groundingOutput = 'Running low-latency gemini-3.1-flash-lite...';
       this.render();
       try {
-        const res = await fetch('/api/gemini/fast-assist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: `Generate 6 low-latency SEO tags and bitrate recommendations for: ${query}` }),
+        const data = await this.postAuthenticatedGemini('/api/gemini/fast-assist', {
+          prompt: `Generate 6 low-latency SEO tags and bitrate recommendations for: ${query}`,
         });
-        const data = await res.json();
         this.groundingOutput = data.text || data.error || '';
       } catch (err) {
         this.groundingOutput = String(err);
@@ -3204,11 +3164,41 @@ export class AppShell {
     });
   }
 
+  private async postAuthenticatedGemini(
+    endpoint: string,
+    payload: Record<string, unknown>
+  ): Promise<Record<string, any>> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.currentUser) {
+      const idToken = await this.currentUser.getIdToken();
+      if (idToken) {
+        headers['Authorization'] = `Bearer ${idToken}`;
+      }
+    }
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    return (await res.json()) as Record<string, any>;
+  }
+
   // Gemini Live API Client (16kHz PCM input, 24kHz gapless scheduled output)
   private async startLiveSession() {
     try {
+      if (!this.currentUser) {
+        this.aiStatusMessage = 'Authentication required: Please sign in with Google to start a Gemini Live Voice session.';
+        showLumenToast('Sign in required for Gemini Live');
+        this.render();
+        return;
+      }
+      const idToken = await this.currentUser.getIdToken();
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      this.liveWs = new WebSocket(`${proto}//${location.host}/live`);
+      this.liveWs = new WebSocket(
+        `${proto}//${location.host}/live?token=${encodeURIComponent(idToken)}`
+      );
       this.inputAudioCtx = new AudioContext({ sampleRate: 16000 });
       this.outputAudioCtx = new AudioContext({ sampleRate: 24000 });
       this.nextStartTime = 0;
@@ -3237,6 +3227,12 @@ export class AppShell {
 
       this.liveWs.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
+        if (msg.error) {
+          this.aiStatusMessage = msg.error;
+          this.liveTranscripts.push(`System: ${msg.error}`);
+          this.render();
+          return;
+        }
         if (msg.inputTranscript) {
           this.liveTranscripts.push(`You: ${msg.inputTranscript}`);
           this.render();
@@ -3313,12 +3309,10 @@ export class AppShell {
         const reader = new FileReader();
         reader.onload = async () => {
           const base64 = String(reader.result || '').split(',')[1] || '';
-          const res = await fetch('/api/gemini/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ base64Audio: base64, mimeType: 'audio/webm' }),
+          const data = await this.postAuthenticatedGemini('/api/gemini/transcribe', {
+            base64Audio: base64,
+            mimeType: 'audio/webm',
           });
-          const data = await res.json();
           this.transcriptionText = data.text || data.error || 'No speech detected.';
           this.aiStatusMessage = 'Transcription complete.';
           this.render();
